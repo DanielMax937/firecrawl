@@ -14,6 +14,7 @@ app.use(bodyParser.json());
 
 const BLOCK_MEDIA = (process.env.BLOCK_MEDIA || 'False').toUpperCase() === 'TRUE';
 const MAX_CONCURRENT_PAGES = Math.max(1, Number.parseInt(process.env.MAX_CONCURRENT_PAGES ?? '10', 10) || 10);
+const HEADLESS = (process.env.HEADLESS || 'true').toLowerCase() !== 'false';
 
 const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
@@ -87,7 +88,7 @@ let browser: Browser;
 
 const initializeBrowser = async () => {
   browser = await chromium.launch({
-    headless: true,
+    headless: HEADLESS,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
