@@ -253,6 +253,21 @@ NUQ_WORKER_COUNT=10
 
 ## RabbitMQ
 
+### Before run pnpm dev
+rabbitmqctl delete_queue nuq.queue_scrape.prefetch
+rabbitmqctl delete_queue nuq.queue_crawl_finished.prefetch
+
+Prevention Tips
+To avoid corrupted queues in local RabbitMQ:
+# Always stop RabbitMQ gracefully
+brew services stop rabbitmq
+
+# Or
+rabbitmqctl stop
+
+# Never force kill the process
+# Avoid: kill -9 <rabbitmq_pid>
+
 ### Why does Firecrawl use RabbitMQ?
 
 RabbitMQ is used as a **prefetch cache** to speed up job distribution. It's **optional** - the system falls back to PostgreSQL if RabbitMQ is unavailable.
@@ -1790,3 +1805,5 @@ brew services restart rabbitmq
 ---
 
 *Generated from local development Q&A session*
+
+
