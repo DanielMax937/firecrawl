@@ -452,10 +452,94 @@ HEADLESS=false pnpm dev
 | Wait for selector | ✅ |
 | Custom headers | ✅ |
 | Skip TLS verification | ✅ |
-| Click/Type actions | ❌ (not implemented) |
-| Screenshots | ❌ (not implemented) |
+| Screenshots | ✅ |
+| Browser actions | ✅ |
+| PDF generation | ✅ |
 
-**Note:** Actions and screenshots require extending the Playwright service code.
+### What browser actions are supported?
+
+The local Playwright service supports the following actions:
+
+| Action | Description | Example |
+|--------|-------------|---------|
+| `wait` | Wait for time or selector | `{"type": "wait", "milliseconds": 1000}` or `{"type": "wait", "selector": "#element"}` |
+| `click` | Click element(s) | `{"type": "click", "selector": "button", "all": false}` |
+| `screenshot` | Take screenshot | `{"type": "screenshot", "fullPage": true}` |
+| `write` | Type text | `{"type": "write", "text": "hello"}` |
+| `press` | Press keyboard key | `{"type": "press", "key": "Enter"}` |
+| `scroll` | Scroll page/element | `{"type": "scroll", "direction": "down", "selector": "#container"}` |
+| `scrape` | Capture HTML at this point | `{"type": "scrape"}` |
+| `executeJavascript` | Run custom JS | `{"type": "executeJavascript", "script": "document.title"}` |
+| `pdf` | Generate PDF | `{"type": "pdf", "format": "A4", "landscape": false}` |
+
+### How do I use actions in a scrape request?
+
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "waitFor": 1000,
+    "actions": [
+      {"type": "wait", "milliseconds": 500},
+      {"type": "scroll", "direction": "down"},
+      {"type": "screenshot", "fullPage": true}
+    ]
+  }'
+```
+
+### How do I take a screenshot?
+
+**Option 1: Using formats**
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "formats": ["markdown", "screenshot"],
+    "waitFor": 1000
+  }'
+```
+
+**Option 2: Using actions (for multiple screenshots)**
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "waitFor": 1000,
+    "actions": [
+      {"type": "screenshot"},
+      {"type": "scroll", "direction": "down"},
+      {"type": "screenshot", "fullPage": true}
+    ]
+  }'
+```
+
+Screenshots are returned as base64-encoded strings in the response.
+
+### How do I generate a PDF?
+
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "waitFor": 1000,
+    "actions": [
+      {"type": "pdf", "format": "A4", "landscape": false, "scale": 1}
+    ]
+  }'
+```
+
+**PDF Options:**
+| Option | Type | Default | Values |
+|--------|------|---------|--------|
+| `format` | string | "Letter" | A0, A1, A2, A3, A4, A5, A6, Letter, Legal, Tabloid, Ledger |
+| `landscape` | boolean | false | true/false |
+| `scale` | number | 1 | 0.1 to 2 |
+
+PDFs are returned as base64-encoded strings in `data.actions.pdfs[]`.
 
 ---
 
@@ -474,16 +558,23 @@ Firecrawl uses a **feature-based scoring system**:
 
 | Engine | Quality | Features |
 |--------|---------|----------|
-| `playwright` | 20 | JS rendering, waitFor |
+| `playwright` | 20 | JS rendering, waitFor, actions, screenshots |
 | `fetch` | 5 | Simple HTTP, fast |
 
 ### How do I force Playwright to be used?
 
-Add `waitFor` to your request:
+Add `waitFor` or `actions` to your request:
 ```bash
 curl -X POST http://localhost:3002/v1/scrape \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com", "waitFor": 1000}'
+```
+
+Or use screenshot format:
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com", "formats": ["markdown", "screenshot"]}'
 ```
 
 ### Example: How is the engine selected for a simple URL?
@@ -696,6 +787,9 @@ curl -X POST http://localhost:3002/v2/scrape \
 | `screenshot` | Take a screenshot |
 | `scrape` | Capture content at this point |
 | `executeJavascript` | Run custom JS |
+| `pdf` | Generate a PDF |
+
+**Note:** All actions are supported in local development with the Playwright service.
 
 ---
 

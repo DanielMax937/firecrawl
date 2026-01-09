@@ -19,6 +19,9 @@ export async function scrapeURLWithPlaywright(
       timeout: meta.abort.scrapeTimeout(),
       headers: meta.options.headers,
       skip_tls_verification: meta.options.skipTlsVerification,
+      actions: meta.options.actions,
+      screenshot: meta.featureFlags.has("screenshot"),
+      full_page_screenshot: meta.featureFlags.has("screenshot@fullScreen"),
     },
     method: "POST",
     logger: meta.logger.child("scrapeURLWithPlaywright/robustFetch"),
@@ -27,6 +30,17 @@ export async function scrapeURLWithPlaywright(
       pageStatusCode: z.number(),
       pageError: z.string().optional(),
       contentType: z.string().optional(),
+      screenshot: z.string().optional(),
+      actions: z
+        .object({
+          screenshots: z.array(z.string()),
+          scrapes: z.array(z.object({ url: z.string(), html: z.string() })),
+          javascriptReturns: z.array(
+            z.object({ type: z.string(), value: z.unknown() }),
+          ),
+          pdfs: z.array(z.string()),
+        })
+        .optional(),
     }),
     mock: meta.mock,
     abort: meta.abort.asSignal(),
@@ -42,6 +56,8 @@ export async function scrapeURLWithPlaywright(
     statusCode: response.pageStatusCode,
     error: response.pageError,
     contentType: response.contentType,
+    screenshot: response.screenshot,
+    actions: response.actions,
 
     proxyUsed: "basic",
   };
