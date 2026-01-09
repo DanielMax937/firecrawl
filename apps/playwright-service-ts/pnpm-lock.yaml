@@ -20,6 +20,9 @@ importers:
       express:
         specifier: 4.22.0
         version: 4.22.0
+      patchright:
+        specifier: ^1.51.1
+        version: 1.57.0
       playwright:
         specifier: ^1.55.1
         version: 1.55.1
@@ -331,6 +334,16 @@ packages:
   parseurl@1.3.3:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
     engines: {node: '>= 0.8'}
+
+  patchright-core@1.57.0:
+    resolution: {integrity: sha512-um/9Wue7IFAa9UDLacjNgDn62ub5GJe1b1qouvYpELIF9rsFVMNhRo/rRXYajupLwp5xKJ0sSjOV6sw8/HarBQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  patchright@1.57.0:
+    resolution: {integrity: sha512-pxbI/D65QiFuCY3qUXKQONRhplR3rkYFhry5ieimEbzLNxu/xfOYizQRyuMgc6F5ZoZ37QNIwZz9PWEfn6aC1Q==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   path-to-regexp@0.1.12:
     resolution: {integrity: sha512-RA1GjUVMnvYFxuqovrEqZoxxW5NUZqbwKtYz/Tt7nXerk0LbLblQmrsgdeOxV5SFHf0UDggjS/bSeOZwt1pmEQ==}
@@ -740,6 +753,14 @@ snapshots:
       ee-first: 1.1.1
 
   parseurl@1.3.3: {}
+
+  patchright-core@1.57.0: {}
+
+  patchright@1.57.0:
+    dependencies:
+      patchright-core: 1.57.0
+    optionalDependencies:
+      fsevents: 2.3.2
 
   path-to-regexp@0.1.12: {}
 

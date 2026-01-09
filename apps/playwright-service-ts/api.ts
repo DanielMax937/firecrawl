@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import { chromium, Browser, BrowserContext, Route, Request as PlaywrightRequest, Page } from 'playwright';
+import { chromium as patchrightChromium } from 'patchright';
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
 import { getError } from './helpers/get_error';
@@ -17,6 +18,13 @@ app.use(bodyParser.json());
 const BLOCK_MEDIA = (process.env.BLOCK_MEDIA || 'False').toUpperCase() === 'TRUE';
 const MAX_CONCURRENT_PAGES = Math.max(1, Number.parseInt(process.env.MAX_CONCURRENT_PAGES ?? '10', 10) || 10);
 const HEADLESS = (process.env.HEADLESS || 'true').toLowerCase() !== 'false';
+
+// Use system Chrome with patchright instead of bundled Chromium
+const USE_SYSTEM_CHROME = (process.env.USE_SYSTEM_CHROME || 'false').toLowerCase() === 'true';
+// Browser profile ID for persistent context (only used with USE_SYSTEM_CHROME)
+const BROWSER_PROFILE_ID = process.env.BROWSER_PROFILE_ID || '1';
+// Browser profiles directory
+const BROWSER_PROFILES_DIR = path.resolve(__dirname, '../../browser-profiles');
 
 // Screenshots folder in project root
 const SCREENSHOTS_DIR = path.resolve(__dirname, '../../screenshots');
@@ -125,24 +133,97 @@ interface UrlModel {
 }
 
 let browser: Browser;
+// Use 'any' type for persistentContext to avoid type conflicts between patchright and playwright
+let persistentContext: any = null;
 
 const initializeBrowser = async () => {
-  console.log(`Launching browser with headless: ${HEADLESS}`);
-  browser = await chromium.launch({
-    headless: HEADLESS,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu'
-    ]
-  });
+  if (USE_SYSTEM_CHROME) {
+    // Use patchright with system Chrome and persistent context
+    console.log(`Launching system Chrome with patchright (headless: ${HEADLESS})`);
+    console.log(`Browser profile ID: ${BROWSER_PROFILE_ID}`);
+
+    // Ensure browser profiles directory exists
+    if (!fs.existsSync(BROWSER_PROFILES_DIR)) {
+      fs.mkdirSync(BROWSER_PROFILES_DIR, { recursive: true });
+      console.log(`Created browser-profiles directory: ${BROWSER_PROFILES_DIR}`);
+    }
+
+    const userDataDir = path.join(BROWSER_PROFILES_DIR, `browser-${BROWSER_PROFILE_ID}`);
+
+    // Ensure profile directory exists
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+      console.log(`Created new profile directory: browser-${BROWSER_PROFILE_ID}`);
+    } else {
+      console.log(`Using existing profile: browser-${BROWSER_PROFILE_ID}`);
+    }
+
+    console.log(`UserDataDir: ${userDataDir}`);
+
+    const launchOptions: any = {
+      channel: "chrome",
+      headless: HEADLESS,
+      viewport: null,
+    };
+
+    // Add proxy configuration if available
+    if (PROXY_SERVER && PROXY_USERNAME && PROXY_PASSWORD) {
+      launchOptions.proxy = {
+        server: PROXY_SERVER.startsWith('http') ? PROXY_SERVER : `http://${PROXY_SERVER}`,
+        username: PROXY_USERNAME,
+        password: PROXY_PASSWORD,
+      };
+      console.log(`Proxy configured: ${PROXY_SERVER}`);
+    } else if (PROXY_SERVER) {
+      launchOptions.proxy = {
+        server: PROXY_SERVER.startsWith('http') ? PROXY_SERVER : `http://${PROXY_SERVER}`,
+      };
+      console.log(`Proxy configured: ${PROXY_SERVER}`);
+    } else {
+      console.log('No proxy configured (direct connection)');
+    }
+
+    // Launch persistent context with patchright
+    persistentContext = await patchrightChromium.launchPersistentContext(userDataDir, launchOptions);
+
+    // Grant clipboard permissions
+    try {
+      await persistentContext.grantPermissions(['clipboard-read', 'clipboard-write']);
+      console.log('Clipboard permissions granted');
+    } catch (permError) {
+      console.warn('Failed to grant clipboard permissions:', (permError as Error).message);
+    }
+
+    // For compatibility, we need a browser reference
+    // In persistent context mode, we'll use the context directly
+    browser = null as any;
+
+    console.log('System Chrome launched successfully with patchright');
+  } else {
+    // Use standard playwright with bundled Chromium
+    console.log(`Launching bundled Chromium with headless: ${HEADLESS}`);
+    browser = await chromium.launch({
+      headless: HEADLESS,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ]
+    });
+  }
 };
 
-const createContext = async (skipTlsVerification: boolean = false) => {
+const createContext = async (skipTlsVerification: boolean = false): Promise<BrowserContext> => {
+  // If using system Chrome with persistent context, return the persistent context
+  if (USE_SYSTEM_CHROME && persistentContext) {
+    return persistentContext;
+  }
+
+  // Standard mode: create a new context
   const userAgent = new UserAgent().toString();
   const viewport = { width: 1280, height: 800 };
 
@@ -188,8 +269,49 @@ const createContext = async (skipTlsVerification: boolean = false) => {
 };
 
 const shutdownBrowser = async () => {
-  if (browser) {
-    await browser.close();
+  if (USE_SYSTEM_CHROME && persistentContext) {
+    try {
+      await persistentContext.close();
+    } catch (e) {
+      // Context may already be closed
+    }
+    persistentContext = null;
+  } else if (browser) {
+    try {
+      await browser.close();
+    } catch (e) {
+      // Browser may already be closed
+    }
+  }
+};
+
+// Check if the persistent context is still valid
+const isContextValid = async (): Promise<boolean> => {
+  if (!USE_SYSTEM_CHROME) {
+    return browser !== null;
+  }
+
+  if (!persistentContext) {
+    return false;
+  }
+
+  try {
+    // Try to get pages - if context is closed, this will throw
+    await persistentContext.pages();
+    return true;
+  } catch (e) {
+    console.log('Persistent context is no longer valid, will reinitialize...');
+    persistentContext = null;
+    return false;
+  }
+};
+
+// Ensure browser is initialized and valid
+const ensureBrowserReady = async (): Promise<void> => {
+  const isValid = await isContextValid();
+  if (!isValid) {
+    console.log('Reinitializing browser...');
+    await initializeBrowser();
   }
 };
 
@@ -471,9 +593,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
     console.warn('⚠️ WARNING: No proxy server provided. Your IP address may be blocked.');
   }
 
-  if (!browser) {
-    await initializeBrowser();
-  }
+  // Ensure browser is initialized and still valid (handles closed browser case)
+  await ensureBrowserReady();
 
   await pageSemaphore.acquire();
 
@@ -549,7 +670,10 @@ app.post('/scrape', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'An error occurred while fetching the page.' });
   } finally {
     if (page) await page.close();
-    if (requestContext) await requestContext.close();
+    // Don't close the context in persistent mode (USE_SYSTEM_CHROME)
+    if (!USE_SYSTEM_CHROME && requestContext) {
+      await requestContext.close();
+    }
     pageSemaphore.release();
   }
 });

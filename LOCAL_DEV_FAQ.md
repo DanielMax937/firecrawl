@@ -443,6 +443,54 @@ pnpm dev
 HEADLESS=false pnpm dev
 ```
 
+### How do I use system Chrome instead of bundled Chromium?
+
+You can use your system Chrome with patchright for better anti-detection and persistent login sessions.
+
+**Option 1: Configure in `.env` file (recommended)**
+
+Edit `apps/playwright-service-ts/.env`:
+```bash
+HEADLESS=false
+PORT=3100
+USE_SYSTEM_CHROME=true
+BROWSER_PROFILE_ID=1
+```
+
+Then just run:
+```bash
+pnpm dev
+```
+
+**Option 2: Use environment variables**
+```bash
+USE_SYSTEM_CHROME=true BROWSER_PROFILE_ID=1 pnpm dev
+```
+
+**Environment Variables:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `USE_SYSTEM_CHROME` | `false` | Use system Chrome with patchright instead of bundled Chromium |
+| `BROWSER_PROFILE_ID` | `1` | Profile ID for persistent context (creates `browser-profiles/browser-{id}/`) |
+
+**Benefits of system Chrome mode:**
+- Persistent login sessions across restarts
+- Better anti-detection (uses patchright)
+- Reuses existing Chrome cookies and extensions
+- Profile data saved in `browser-profiles/` directory
+- Auto-reinitializes browser if closed manually
+
+**Example with proxy:**
+```bash
+USE_SYSTEM_CHROME=true \
+BROWSER_PROFILE_ID=1 \
+PROXY_SERVER=proxy.example.com:8080 \
+PROXY_USERNAME=user \
+PROXY_PASSWORD=pass \
+HEADLESS=false \
+pnpm dev
+```
+
 ### What features does the local Playwright service support?
 
 | Feature | Supported |

@@ -22,6 +22,9 @@ apps/playwright-service-ts/package-lock.json
 # Screenshots from playwright service
 /screenshots/
 
+# Browser profiles for patchright persistent context
+/browser-profiles/
+
 
 /examples/o1_web_crawler/venv
 *.pyc
