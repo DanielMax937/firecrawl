@@ -4,6 +4,8 @@ import { chromium, Browser, BrowserContext, Route, Request as PlaywrightRequest,
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
 import { getError } from './helpers/get_error';
+import * as fs from 'fs';
+import * as path from 'path';
 
 dotenv.config();
 
@@ -15,6 +17,9 @@ app.use(bodyParser.json());
 const BLOCK_MEDIA = (process.env.BLOCK_MEDIA || 'False').toUpperCase() === 'TRUE';
 const MAX_CONCURRENT_PAGES = Math.max(1, Number.parseInt(process.env.MAX_CONCURRENT_PAGES ?? '10', 10) || 10);
 const HEADLESS = (process.env.HEADLESS || 'true').toLowerCase() !== 'false';
+
+// Screenshots folder in project root
+const SCREENSHOTS_DIR = path.resolve(__dirname, '../../screenshots');
 
 const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
@@ -231,12 +236,27 @@ const scrapePage = async (page: Page, url: string, waitUntil: 'load' | 'networki
   };
 };
 
-// Take a screenshot and return base64
+// Take a screenshot, save to file, and return base64
 const takeScreenshot = async (page: Page, fullPage: boolean = false): Promise<string> => {
   const screenshot = await page.screenshot({
     fullPage,
     type: 'png',
   });
+
+  // Ensure screenshots directory exists
+  if (!fs.existsSync(SCREENSHOTS_DIR)) {
+    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+  }
+
+  // Generate filename with timestamp
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `screenshot-${timestamp}.png`;
+  const filepath = path.join(SCREENSHOTS_DIR, filename);
+
+  // Save screenshot to file
+  fs.writeFileSync(filepath, screenshot);
+  console.log(`  📸 Screenshot saved: ${filepath}`);
+
   return screenshot.toString('base64');
 };
 
