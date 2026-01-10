@@ -884,11 +884,371 @@ wait
 
 ---
 
-## Test Case 15: Error Handling - Invalid URL with Different Settings
+## Test Case 15: Recording Mode - Video
+
+**Purpose:** Verify video recording captures browser session as .webm file
+
+### Request 15.1: Video recording with playwright
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "video", "width": 1280, "height": 720},
+      {"type": "wait", "milliseconds": 1000},
+      {"type": "scroll", "direction": "down"},
+      {"type": "screenshot"}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "playwright" | request |
+| headless | true | request |
+| actions | [record(video), wait, scroll, screenshot] | request |
+
+**Expected Response:**
+```json
+{
+  "content": "...",
+  "pageStatusCode": 200,
+  "actions": {
+    "screenshots": ["base64..."],
+    "scrapes": [],
+    "javascriptReturns": [],
+    "pdfs": [],
+    "recordings": ["base64-webm-video..."]
+  }
+}
+```
+
+**Expected Console Log:**
+```
+🎬 Video recording enabled (1280x720)
+🎬 Video saved: /path/to/videos/video-timestamp.webm
+🎬 Video converted to base64 (... chars)
+```
+
+**Note:** Video recording only works with `playwright` engine (not patchright persistent context).
+
+### Request 15.2: Video recording with default dimensions
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "video"},
+      {"type": "wait", "milliseconds": 500}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "playwright" | request |
+| headless | true | request |
+| actions | [record(video, default size), wait] | request |
+
+**Expected:** Video recorded at default 1280x720 resolution
+
+---
+
+## Test Case 16: Recording Mode - Trace
+
+**Purpose:** Verify trace recording captures DOM snapshots, network, and console logs
+
+### Request 16.1: Trace recording with screenshots and snapshots
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "trace", "screenshots": true, "snapshots": true},
+      {"type": "wait", "milliseconds": 1000},
+      {"type": "click", "selector": "a"},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "playwright" | request |
+| headless | true | request |
+| actions | [record(trace), wait, click, scroll] | request |
+
+**Expected Response:**
+```json
+{
+  "content": "...",
+  "pageStatusCode": 200,
+  "actions": {
+    "screenshots": [],
+    "scrapes": [],
+    "javascriptReturns": [],
+    "pdfs": [],
+    "recordings": ["base64-zip-trace..."]
+  }
+}
+```
+
+**Expected Console Log:**
+```
+📊 Tracing started (screenshots: true, snapshots: true)
+📊 Trace saved: /path/to/traces/trace-timestamp.zip
+📊 Trace converted to base64 (... chars)
+```
+
+**Viewing the trace:**
+```bash
+# Decode and save the trace
+echo "base64-content" | base64 -d > trace.zip
+
+# View in Playwright Trace Viewer
+npx playwright show-trace trace.zip
+```
+
+### Request 16.2: Trace recording without screenshots
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "trace", "screenshots": false, "snapshots": true},
+      {"type": "wait", "milliseconds": 500}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "playwright" | request |
+| headless | true | request |
+| actions | [record(trace, no screenshots), wait] | request |
+
+**Expected:** Smaller trace file without screenshot data
+
+---
+
+## Test Case 17: Recording Mode - rrweb
+
+**Purpose:** Verify rrweb recording captures DOM mutations as JSON events
+
+### Request 17.1: rrweb recording
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "scroll", "direction": "down"},
+      {"type": "scroll", "direction": "up"}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "playwright" | request |
+| headless | true | request |
+| actions | [record(rrweb), wait, scroll x2] | request |
+
+**Expected Response:**
+```json
+{
+  "content": "...",
+  "pageStatusCode": 200,
+  "actions": {
+    "screenshots": [],
+    "scrapes": [],
+    "javascriptReturns": [],
+    "pdfs": [],
+    "recordings": ["base64-json-events..."]
+  }
+}
+```
+
+**Expected Console Log:**
+```
+🎥 rrweb script injection prepared
+🎥 rrweb events collected: N events (... chars base64)
+```
+
+**Decoding rrweb events:**
+```bash
+# Decode the base64 JSON
+echo "base64-content" | base64 -d > events.json
+
+# The JSON contains an array of rrweb events that can be replayed
+# using rrweb-player library
+```
+
+### Request 17.2: rrweb with patchright engine
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "patchright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 1500}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "patchright" | request |
+| headless | true | request |
+| actions | [record(rrweb), wait] | request |
+
+**Expected:** rrweb works with both engines (unlike video mode)
+
+---
+
+## Test Case 18: Recording Mode Comparison
+
+**Purpose:** Compare output sizes and use cases for each recording mode
+
+### Request 18.1: Same page with video mode
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://news.ycombinator.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "video"},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }'
+```
+
+### Request 18.2: Same page with trace mode
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://news.ycombinator.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "trace"},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }'
+```
+
+### Request 18.3: Same page with rrweb mode
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://news.ycombinator.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }'
+```
+
+**Comparison:**
+| Mode | Output Format | Typical Size | Best For |
+|------|---------------|--------------|----------|
+| video | .webm (base64) | Large (MBs) | Visual debugging, demos |
+| trace | .zip (base64) | Medium (100s KB) | Debugging with network/console |
+| rrweb | JSON (base64) | Small (10s KB) | Lightweight replay, storage |
+
+---
+
+## Test Case 19: Recording with Other Actions
+
+**Purpose:** Verify recording works alongside other actions
+
+### Request 19.1: Recording + screenshot + scrape
+```bash
+curl -X POST http://localhost:3003/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 1000},
+      {"type": "screenshot", "fullPage": true},
+      {"type": "scroll", "direction": "down"},
+      {"type": "scrape"},
+      {"type": "executeJavascript", "script": "document.title"}
+    ]
+  }'
+```
+
+**Request Parameters:**
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| url | "https://example.com" | request |
+| browser_engine | "playwright" | request |
+| headless | true | request |
+| actions | [record, wait, screenshot, scroll, scrape, js] | request |
+
+**Expected Response:**
+```json
+{
+  "actions": {
+    "screenshots": ["base64-screenshot..."],
+    "scrapes": [{"url": "...", "html": "..."}],
+    "javascriptReturns": [{"type": "string", "value": "Example Domain"}],
+    "pdfs": [],
+    "recordings": ["base64-rrweb-events..."]
+  }
+}
+```
+
+---
+
+## Test Case 20: Error Handling - Invalid URL with Different Settings
 
 **Purpose:** Verify error handling works with different engine/headless combinations
 
-### Request 15.1: Invalid URL with playwright headless=true
+### Request 20.1: Invalid URL with playwright headless=true
 ```bash
 curl -X POST http://localhost:3003/scrape \
   -H 'Content-Type: application/json' \
@@ -913,7 +1273,7 @@ curl -X POST http://localhost:3003/scrape \
 }
 ```
 
-### Request 15.2: Invalid URL with patchright headless=false
+### Request 20.2: Invalid URL with patchright headless=false
 ```bash
 curl -X POST http://localhost:3003/scrape \
   -H 'Content-Type: application/json' \
@@ -971,5 +1331,13 @@ curl -X POST http://localhost:3003/scrape \
 | 13.1 | example.com | patchright | (default) | - |
 | 13.2 | example.com | playwright | (default) | - |
 | 14.1 | multiple | mixed | mixed | Concurrent |
-| 15.1 | invalid | playwright | true | Error test |
-| 15.2 | invalid | patchright | false | Error test |
+| 15.1 | example.com | playwright | true | record(video) |
+| 15.2 | example.com | playwright | true | record(video, default) |
+| 16.1 | example.com | playwright | true | record(trace) |
+| 16.2 | example.com | playwright | true | record(trace, no screenshots) |
+| 17.1 | example.com | playwright | true | record(rrweb) |
+| 17.2 | example.com | patchright | true | record(rrweb) |
+| 18.1-18.3 | news.ycombinator.com | playwright | true | record mode comparison |
+| 19.1 | example.com | playwright | true | record + screenshot + scrape |
+| 20.1 | invalid | playwright | true | Error test |
+| 20.2 | invalid | patchright | false | Error test |

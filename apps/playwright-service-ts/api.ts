@@ -29,6 +29,12 @@ const BROWSER_PROFILES_DIR = path.resolve(__dirname, '../../browser-profiles');
 // Screenshots folder in project root
 const SCREENSHOTS_DIR = path.resolve(__dirname, '../../screenshots');
 
+// Videos folder in project root
+const VIDEOS_DIR = path.resolve(__dirname, '../../videos');
+
+// Traces folder in project root
+const TRACES_DIR = path.resolve(__dirname, '../../traces');
+
 const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || null;
@@ -99,9 +105,13 @@ type Action =
   | { type: "scroll"; direction?: "up" | "down"; selector?: string }
   | { type: "scrape" }
   | { type: "executeJavascript"; script: string }
-  | { type: "pdf"; landscape?: boolean; scale?: number; format?: string };
+  | { type: "pdf"; landscape?: boolean; scale?: number; format?: string }
+  | { type: "record"; mode?: "video" | "trace" | "rrweb"; width?: number; height?: number; screenshots?: boolean; snapshots?: boolean };
 
 type PdfFormat = "A0" | "A1" | "A2" | "A3" | "A4" | "A5" | "A6" | "Letter" | "Legal" | "Tabloid" | "Ledger";
+
+// Record mode type
+type RecordMode = "video" | "trace" | "rrweb";
 
 interface ScrapeActionContent {
   url: string;
@@ -118,6 +128,7 @@ interface ActionResults {
   scrapes: ScrapeActionContent[];
   javascriptReturns: JavascriptReturnValue[];
   pdfs: string[];
+  recordings: string[];
 }
 
 interface UrlModel {
@@ -276,9 +287,24 @@ const initializeBrowser = async (engine: "playwright" | "patchright", headless: 
   }
 };
 
-const createContext = async (skipTlsVerification: boolean = false, engine: "playwright" | "patchright"): Promise<BrowserContext> => {
+// Video recording options
+interface VideoRecordingOptions {
+  enabled: boolean;
+  width?: number;
+  height?: number;
+}
+
+const createContext = async (
+  skipTlsVerification: boolean = false,
+  engine: "playwright" | "patchright",
+  videoOptions?: VideoRecordingOptions
+): Promise<BrowserContext> => {
   // If using patchright with persistent context, return the persistent context
+  // Note: Video recording is not supported with persistent context
   if (engine === "patchright" && patchrightContext) {
+    if (videoOptions?.enabled) {
+      console.warn('⚠️ Video recording is not supported with patchright persistent context');
+    }
     return patchrightContext;
   }
 
@@ -295,6 +321,24 @@ const createContext = async (skipTlsVerification: boolean = false, engine: "play
     viewport,
     ignoreHTTPSErrors: skipTlsVerification,
   };
+
+  // Add video recording options if enabled
+  if (videoOptions?.enabled) {
+    // Ensure videos directory exists
+    if (!fs.existsSync(VIDEOS_DIR)) {
+      fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+      console.log(`Created videos directory: ${VIDEOS_DIR}`);
+    }
+
+    contextOptions.recordVideo = {
+      dir: VIDEOS_DIR,
+      size: {
+        width: videoOptions.width || 1280,
+        height: videoOptions.height || 720,
+      },
+    };
+    console.log(`  🎬 Video recording enabled (${contextOptions.recordVideo.size.width}x${contextOptions.recordVideo.size.height})`);
+  }
 
   if (PROXY_SERVER && PROXY_USERNAME && PROXY_PASSWORD) {
     contextOptions.proxy = {
@@ -387,6 +431,56 @@ const ensureBrowserReady = async (engine: "playwright" | "patchright", headless:
   }
 };
 
+// Check if actions contain a record action
+const hasRecordAction = (actions?: Action[]): boolean => {
+  if (!actions) return false;
+  return actions.some(action => action.type === 'record');
+};
+
+// Get record mode from actions (default: video)
+const getRecordMode = (actions?: Action[]): RecordMode | undefined => {
+  if (!actions) return undefined;
+  const recordAction = actions.find(action => action.type === 'record');
+  if (!recordAction || recordAction.type !== 'record') return undefined;
+  return recordAction.mode || 'video'; // default to video mode
+};
+
+// Extract video recording options from actions (for mode: video)
+const getVideoOptions = (actions?: Action[]): VideoRecordingOptions | undefined => {
+  if (!actions) return undefined;
+  const recordAction = actions.find(action => action.type === 'record');
+  if (!recordAction || recordAction.type !== 'record') return undefined;
+  // Only return video options if mode is video (or not specified, defaulting to video)
+  const mode = recordAction.mode || 'video';
+  if (mode !== 'video') return undefined;
+  return {
+    enabled: true,
+    width: recordAction.width,
+    height: recordAction.height,
+  };
+};
+
+// Trace options interface
+interface TraceOptions {
+  enabled: boolean;
+  screenshots: boolean;
+  snapshots: boolean;
+}
+
+// Extract trace options from actions (for mode: trace)
+const getTraceOptions = (actions?: Action[]): TraceOptions | undefined => {
+  if (!actions) return undefined;
+  const recordAction = actions.find(action => action.type === 'record');
+  if (!recordAction || recordAction.type !== 'record') return undefined;
+  // Only return trace options if mode is trace
+  if (recordAction.mode !== 'trace') return undefined;
+  return {
+    enabled: true,
+    screenshots: recordAction.screenshots !== false, // default true
+    snapshots: recordAction.snapshots !== false,     // default true
+  };
+};
+
 const isValidUrl = (urlString: string): boolean => {
   try {
     new URL(urlString);
@@ -461,6 +555,7 @@ const executeActions = async (page: Page, actions: Action[]): Promise<ActionResu
     scrapes: [],
     javascriptReturns: [],
     pdfs: [],
+    recordings: [],
   };
 
   for (let i = 0; i < actions.length; i++) {
@@ -589,6 +684,24 @@ const executeActions = async (page: Page, actions: Action[]): Promise<ActionResu
           break;
         }
 
+        case 'record': {
+          // Recording is handled at context/page level
+          // This action serves as a marker that recording should be active
+          const mode = action.mode || 'video';
+          if (mode === 'video') {
+            const size = action.width && action.height ? `${action.width}x${action.height}` : '1280x720 (default)';
+            console.log(`  → Video recording active (size: ${size})`);
+          } else if (mode === 'trace') {
+            const opts = [];
+            if (action.screenshots !== false) opts.push('screenshots');
+            if (action.snapshots !== false) opts.push('snapshots');
+            console.log(`  → Trace recording active (${opts.join(', ')})`);
+          } else if (mode === 'rrweb') {
+            console.log(`  → rrweb recording active (DOM mutations as JSON)`);
+          }
+          break;
+        }
+
         default: {
           console.warn(`⚠️ Unknown action type: ${(action as any).type}`);
         }
@@ -646,6 +759,12 @@ app.post('/scrape', async (req: Request, res: Response) => {
   const engine = getEffectiveEngine(browser_engine);
   const headless = getEffectiveHeadless(requestHeadless);
 
+  // Check if recording is requested and get mode
+  const isRecording = hasRecordAction(actions);
+  const recordMode = getRecordMode(actions);
+  const videoOptions = getVideoOptions(actions);
+  const traceOptions = getTraceOptions(actions);
+
   console.log(`================= Scrape Request =================`);
   console.log(`URL: ${url}`);
   console.log(`Wait After Load: ${wait_after_load}`);
@@ -658,6 +777,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   console.log(`Browser Engine: ${engine}${browser_engine ? ' (from request)' : ' (from env)'}`);
   console.log(`Headless: ${headless}${requestHeadless !== undefined ? ' (from request)' : ' (from env)'}`);
   console.log(`Actions: ${actions ? actions.length : 0} actions`);
+  console.log(`Recording: ${isRecording ? recordMode : 'none'}`);
   console.log(`==================================================`);
 
   if (!url) {
@@ -679,10 +799,53 @@ app.post('/scrape', async (req: Request, res: Response) => {
 
   let requestContext: BrowserContext | null = null;
   let page: Page | null = null;
+  let videoPath: string | null = null;
+  let tracePath: string | null = null;
 
   try {
-    requestContext = await createContext(skip_tls_verification, engine);
+    // Create context with video recording if requested (mode: video)
+    requestContext = await createContext(skip_tls_verification, engine, videoOptions);
+
+    // Start tracing if requested (mode: trace, must be done before creating page)
+    if (recordMode === 'trace' && traceOptions && requestContext) {
+      // Ensure traces directory exists
+      if (!fs.existsSync(TRACES_DIR)) {
+        fs.mkdirSync(TRACES_DIR, { recursive: true });
+        console.log(`Created traces directory: ${TRACES_DIR}`);
+      }
+
+      await requestContext.tracing.start({
+        screenshots: traceOptions.screenshots,
+        snapshots: traceOptions.snapshots,
+      });
+      console.log(`  📊 Tracing started (screenshots: ${traceOptions.screenshots}, snapshots: ${traceOptions.snapshots})`);
+    }
+
     page = await requestContext.newPage();
+
+    // Inject rrweb recording script if mode is rrweb (before navigation)
+    if (recordMode === 'rrweb') {
+      // Add script to inject rrweb on page load
+      await page.addInitScript(() => {
+        // Create a global array to store events
+        (window as any).__rrwebEvents = [];
+
+        // Load rrweb from CDN
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/rrweb@2.0.0-alpha.11/dist/rrweb.min.js';
+        script.onload = () => {
+          // Start recording once rrweb is loaded
+          (window as any).rrweb.record({
+            emit: (event: any) => {
+              (window as any).__rrwebEvents.push(event);
+            },
+          });
+          console.log('rrweb recording started');
+        };
+        document.head.appendChild(script);
+      });
+      console.log(`  🎥 rrweb script injection prepared`);
+    }
 
     if (headers) {
       await page.setExtraHTTPHeaders(headers);
@@ -690,6 +853,11 @@ app.post('/scrape', async (req: Request, res: Response) => {
 
     const result = await scrapePage(page, url, 'load', wait_after_load, timeout, check_selector);
     const pageError = result.status !== 200 ? getError(result.status) : undefined;
+
+    // Wait a bit for rrweb to initialize after page load
+    if (recordMode === 'rrweb') {
+      await page.waitForTimeout(500); // Give rrweb time to load and start
+    }
 
     // Execute actions if provided
     let actionResults: ActionResults | undefined;
@@ -716,7 +884,108 @@ app.post('/scrape', async (req: Request, res: Response) => {
         scrapes: [],
         javascriptReturns: [],
         pdfs: [],
+        recordings: [],
       };
+    }
+
+    // Handle video recording (mode: video) - must close page first to finalize video
+    if (recordMode === 'video' && page) {
+      // Get video object before closing page
+      const video = page.video();
+      if (video) {
+        // Close page to finalize video
+        await page.close();
+        page = null;
+
+        // Get the video path
+        videoPath = await video.path();
+        console.log(`  🎬 Video saved: ${videoPath}`);
+
+        // Read video file and convert to base64
+        if (videoPath && fs.existsSync(videoPath)) {
+          const videoBuffer = fs.readFileSync(videoPath);
+          const videoBase64 = videoBuffer.toString('base64');
+
+          // Initialize actionResults if needed
+          if (!actionResults) {
+            actionResults = {
+              screenshots: [],
+              scrapes: [],
+              javascriptReturns: [],
+              pdfs: [],
+              recordings: [],
+            };
+          }
+
+          actionResults.recordings.push(videoBase64);
+          console.log(`  🎬 Video converted to base64 (${videoBase64.length} chars)`);
+        }
+      }
+    }
+
+    // Handle tracing (mode: trace) - stop tracing and save to file
+    if (recordMode === 'trace' && requestContext) {
+      // Generate trace filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      tracePath = path.join(TRACES_DIR, `trace-${timestamp}.zip`);
+
+      // Stop tracing and save to file
+      await requestContext.tracing.stop({ path: tracePath });
+      console.log(`  📊 Trace saved: ${tracePath}`);
+
+      // Read trace file and convert to base64
+      if (tracePath && fs.existsSync(tracePath)) {
+        const traceBuffer = fs.readFileSync(tracePath);
+        const traceBase64 = traceBuffer.toString('base64');
+
+        // Initialize actionResults if needed
+        if (!actionResults) {
+          actionResults = {
+            screenshots: [],
+            scrapes: [],
+            javascriptReturns: [],
+            pdfs: [],
+            recordings: [],
+          };
+        }
+
+        actionResults.recordings.push(traceBase64);
+        console.log(`  📊 Trace converted to base64 (${traceBase64.length} chars)`);
+      }
+    }
+
+    // Handle rrweb recording (mode: rrweb) - collect events from page
+    if (recordMode === 'rrweb' && page) {
+      try {
+        // Collect rrweb events from the page
+        const rrwebEvents = await page.evaluate(() => {
+          return (window as any).__rrwebEvents || [];
+        });
+
+        if (rrwebEvents && rrwebEvents.length > 0) {
+          // Convert events to JSON string, then to base64
+          const eventsJson = JSON.stringify(rrwebEvents);
+          const eventsBase64 = Buffer.from(eventsJson).toString('base64');
+
+          // Initialize actionResults if needed
+          if (!actionResults) {
+            actionResults = {
+              screenshots: [],
+              scrapes: [],
+              javascriptReturns: [],
+              pdfs: [],
+              recordings: [],
+            };
+          }
+
+          actionResults.recordings.push(eventsBase64);
+          console.log(`  🎥 rrweb events collected: ${rrwebEvents.length} events (${eventsBase64.length} chars base64)`);
+        } else {
+          console.warn(`  ⚠️ No rrweb events captured`);
+        }
+      } catch (rrwebError) {
+        console.error(`  ❌ Failed to collect rrweb events:`, rrwebError);
+      }
     }
 
     if (!pageError) {
@@ -733,12 +1002,14 @@ app.post('/scrape', async (req: Request, res: Response) => {
       ...(actionResults && (actionResults.screenshots.length > 0 ||
                            actionResults.scrapes.length > 0 ||
                            actionResults.javascriptReturns.length > 0 ||
-                           actionResults.pdfs.length > 0) && {
+                           actionResults.pdfs.length > 0 ||
+                           actionResults.recordings.length > 0) && {
         actions: {
           screenshots: actionResults.screenshots,
           scrapes: actionResults.scrapes,
           javascriptReturns: actionResults.javascriptReturns,
           pdfs: actionResults.pdfs,
+          recordings: actionResults.recordings,
         }
       }),
       ...(pageError && { pageError })
@@ -750,6 +1021,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   } finally {
     if (page) await page.close();
     // Don't close the context in patchright mode (persistent context)
+    // For video recording, we must close the context to finalize the video
     if (engine === "playwright" && requestContext) {
       await requestContext.close();
     }

@@ -250,6 +250,104 @@ for i in {1..4}; do
 done
 echo ""
 
+# Test 11: Recording mode - rrweb (lightweight, works with both engines)
+echo "=== Test 11: Recording mode - rrweb ==="
+log_info "Testing rrweb recording with playwright..."
+RESPONSE=$(curl -s -X POST "$BASE_URL/scrape" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 1500},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }')
+RECORDINGS_LEN=$(echo "$RESPONSE" | jq -r '.actions.recordings[0] | length // 0')
+if [ "$RECORDINGS_LEN" -gt 100 ]; then
+    log_pass "rrweb recording works (base64 length: $RECORDINGS_LEN)"
+else
+    log_fail "rrweb recording failed (base64 length: $RECORDINGS_LEN)"
+fi
+echo ""
+
+# Test 12: Recording mode - trace
+echo "=== Test 12: Recording mode - trace ==="
+log_info "Testing trace recording..."
+RESPONSE=$(curl -s -X POST "$BASE_URL/scrape" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "trace", "screenshots": true, "snapshots": true},
+      {"type": "wait", "milliseconds": 1000},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }')
+RECORDINGS_LEN=$(echo "$RESPONSE" | jq -r '.actions.recordings[0] | length // 0')
+if [ "$RECORDINGS_LEN" -gt 1000 ]; then
+    log_pass "Trace recording works (base64 length: $RECORDINGS_LEN)"
+else
+    log_fail "Trace recording failed (base64 length: $RECORDINGS_LEN)"
+fi
+echo ""
+
+# Test 13: Recording mode - video (only works with playwright, not patchright)
+echo "=== Test 13: Recording mode - video ==="
+log_info "Testing video recording with playwright..."
+RESPONSE=$(curl -s -X POST "$BASE_URL/scrape" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "video", "width": 1280, "height": 720},
+      {"type": "wait", "milliseconds": 1500},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }')
+RECORDINGS_LEN=$(echo "$RESPONSE" | jq -r '.actions.recordings[0] | length // 0')
+if [ "$RECORDINGS_LEN" -gt 1000 ]; then
+    log_pass "Video recording works (base64 length: $RECORDINGS_LEN)"
+else
+    log_fail "Video recording failed (base64 length: $RECORDINGS_LEN)"
+fi
+echo ""
+
+# Test 14: Recording with other actions
+echo "=== Test 14: Recording with other actions ==="
+log_info "Testing recording combined with screenshot and scrape..."
+RESPONSE=$(curl -s -X POST "$BASE_URL/scrape" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright",
+    "headless": true,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 1000},
+      {"type": "screenshot"},
+      {"type": "scrape"},
+      {"type": "executeJavascript", "script": "document.title"}
+    ]
+  }')
+RECORDINGS_LEN=$(echo "$RESPONSE" | jq -r '.actions.recordings[0] | length // 0')
+SCREENSHOTS_COUNT=$(echo "$RESPONSE" | jq -r '.actions.screenshots | length // 0')
+SCRAPES_COUNT=$(echo "$RESPONSE" | jq -r '.actions.scrapes | length // 0')
+JS_COUNT=$(echo "$RESPONSE" | jq -r '.actions.javascriptReturns | length // 0')
+
+if [ "$RECORDINGS_LEN" -gt 100 ] && [ "$SCREENSHOTS_COUNT" -gt 0 ] && [ "$SCRAPES_COUNT" -gt 0 ] && [ "$JS_COUNT" -gt 0 ]; then
+    log_pass "Recording with other actions works (recordings: $RECORDINGS_LEN, screenshots: $SCREENSHOTS_COUNT, scrapes: $SCRAPES_COUNT, js: $JS_COUNT)"
+else
+    log_fail "Recording with other actions failed"
+fi
+echo ""
+
 # Final health check
 echo "=== Final Health Check ==="
 curl -s "$BASE_URL/health" | jq

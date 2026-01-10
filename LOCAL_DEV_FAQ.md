@@ -548,6 +548,150 @@ The local Playwright service supports the following actions:
 | `scrape` | Capture HTML at this point | `{"type": "scrape"}` |
 | `executeJavascript` | Run custom JS | `{"type": "executeJavascript", "script": "document.title"}` |
 | `pdf` | Generate PDF | `{"type": "pdf", "format": "A4", "landscape": false}` |
+| `record` | Record browser session | `{"type": "record", "mode": "video"}` (see Recording Modes below) |
+
+### Recording Modes
+
+The `record` action supports three different recording modes, each suited for different use cases:
+
+| Mode | Output Format | Size | Best For | Engine Support |
+|------|---------------|------|----------|----------------|
+| `video` | .webm (base64) | Large (MBs) | Visual debugging, demos | Playwright only |
+| `trace` | .zip (base64) | Medium (100s KB) | Debugging with network/console | Playwright only |
+| `rrweb` | JSON (base64) | Small (10s KB) | Lightweight replay, storage | Both engines |
+
+#### Video Mode (`mode: "video"`)
+
+Records the browser session as a `.webm` video file using Playwright's CDP (Chrome DevTools Protocol) integration.
+
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "waitFor": 1000,
+    "actions": [
+      {"type": "record", "mode": "video", "width": 1280, "height": 720},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "scroll", "direction": "down"}
+    ]
+  }'
+```
+
+**Options:**
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `width` | number | 1280 | Video width in pixels |
+| `height` | number | 720 | Video height in pixels |
+
+**Limitation:** Only works with `playwright` engine (not patchright persistent context).
+
+**Decoding the video:**
+```bash
+# The response contains base64-encoded .webm video
+jq -r '.actions.recordings[0]' response.json | base64 -d > session.webm
+# Play with any video player (vlc, mpv, etc.)
+```
+
+#### Trace Mode (`mode: "trace"`)
+
+Records a Playwright trace that captures DOM snapshots, network requests, console logs, and more. Can be viewed in Playwright Trace Viewer.
+
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "waitFor": 1000,
+    "actions": [
+      {"type": "record", "mode": "trace", "screenshots": true, "snapshots": true},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "click", "selector": "a"}
+    ]
+  }'
+```
+
+**Options:**
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `screenshots` | boolean | true | Capture screenshots in trace |
+| `snapshots` | boolean | true | Capture DOM snapshots |
+
+**Viewing the trace:**
+```bash
+# Decode and save the trace
+jq -r '.actions.recordings[0]' response.json | base64 -d > trace.zip
+
+# View in Playwright Trace Viewer
+npx playwright show-trace trace.zip
+```
+
+**Note:** Trace Viewer provides a rich GUI with timeline, network tab, console, and screenshots.
+
+#### rrweb Mode (`mode: "rrweb"`)
+
+Records DOM mutations as JSON events using the rrweb library. Lightweight and replayable in the browser using rrweb-player.
+
+```bash
+curl -X POST http://localhost:3002/v1/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "waitFor": 1000,
+    "actions": [
+      {"type": "record", "mode": "rrweb"},
+      {"type": "wait", "milliseconds": 2000},
+      {"type": "scroll", "direction": "down"},
+      {"type": "scroll", "direction": "up"}
+    ]
+  }'
+```
+
+**Decoding rrweb events:**
+```bash
+# The response contains base64-encoded JSON array of events
+jq -r '.actions.recordings[0]' response.json | base64 -d > events.json
+```
+
+**Replaying in browser:**
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/index.js"></script>
+</head>
+<body>
+  <div id="player"></div>
+  <script>
+    fetch('events.json')
+      .then(r => r.json())
+      .then(events => {
+        new rrwebPlayer({
+          target: document.getElementById('player'),
+          props: { events }
+        });
+      });
+  </script>
+</body>
+</html>
+```
+
+**Benefits:**
+- Small file size (perfect for storage)
+- Works with both `playwright` and `patchright` engines
+- Fully replayable in browser
+- No external viewer needed
+
+#### Recording Comparison
+
+| Feature | Video | Trace | rrweb |
+|---------|-------|-------|-------|
+| Visual output | ✅ (video) | ✅ (screenshots) | ✅ (replay) |
+| Network requests | ❌ | ✅ | ❌ |
+| Console logs | ❌ | ✅ | ❌ |
+| File size | Large | Medium | Small |
+| Replayable | Yes (video player) | Yes (Trace Viewer) | Yes (browser) |
+| Engine support | Playwright only | Playwright only | Both engines |
 
 ### How do I use actions in a scrape request?
 
