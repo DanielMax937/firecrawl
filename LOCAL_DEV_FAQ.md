@@ -491,6 +491,35 @@ HEADLESS=false \
 pnpm dev
 ```
 
+**Option 3: Override per-request with `browser_engine` parameter**
+
+You can override the engine on a per-request basis using the `browser_engine` parameter:
+
+```bash
+# Force patchright (system Chrome) for this request
+curl -X POST http://localhost:3100/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "patchright"
+  }'
+
+# Force playwright (bundled Chromium) for this request
+curl -X POST http://localhost:3100/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://example.com",
+    "browser_engine": "playwright"
+  }'
+```
+
+| Value | Description |
+|-------|-------------|
+| `"playwright"` | Use bundled Chromium (standard Playwright) |
+| `"patchright"` | Use system Chrome with patchright (persistent profile) |
+
+**Note:** When switching engines, the service will automatically close the current browser and launch the new one.
+
 ### What features does the local Playwright service support?
 
 | Feature | Supported |

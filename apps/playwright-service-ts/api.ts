@@ -130,14 +130,34 @@ interface UrlModel {
   actions?: Action[];
   screenshot?: boolean;
   full_page_screenshot?: boolean;
+  // Override USE_SYSTEM_CHROME env: "playwright" = bundled Chromium, "patchright" = system Chrome
+  browser_engine?: "playwright" | "patchright";
 }
 
 let browser: Browser;
 // Use 'any' type for persistentContext to avoid type conflicts between patchright and playwright
 let persistentContext: any = null;
+// Track which engine is currently active
+let currentEngine: "playwright" | "patchright" | null = null;
 
-const initializeBrowser = async () => {
-  if (USE_SYSTEM_CHROME) {
+// Determine which engine to use based on request parameter or env
+const getEffectiveEngine = (requestEngine?: "playwright" | "patchright"): "playwright" | "patchright" => {
+  if (requestEngine) {
+    return requestEngine;
+  }
+  return USE_SYSTEM_CHROME ? "patchright" : "playwright";
+};
+
+const initializeBrowser = async (engine: "playwright" | "patchright" = USE_SYSTEM_CHROME ? "patchright" : "playwright") => {
+  // If switching engines, close the current browser first
+  if (currentEngine && currentEngine !== engine) {
+    console.log(`Switching browser engine from ${currentEngine} to ${engine}...`);
+    await shutdownBrowser();
+  }
+
+  currentEngine = engine;
+
+  if (engine === "patchright") {
     // Use patchright with system Chrome and persistent context
     console.log(`Launching system Chrome with patchright (headless: ${HEADLESS})`);
     console.log(`Browser profile ID: ${BROWSER_PROFILE_ID}`);
@@ -217,9 +237,9 @@ const initializeBrowser = async () => {
   }
 };
 
-const createContext = async (skipTlsVerification: boolean = false): Promise<BrowserContext> => {
-  // If using system Chrome with persistent context, return the persistent context
-  if (USE_SYSTEM_CHROME && persistentContext) {
+const createContext = async (skipTlsVerification: boolean = false, engine: "playwright" | "patchright" = currentEngine || "playwright"): Promise<BrowserContext> => {
+  // If using patchright with persistent context, return the persistent context
+  if (engine === "patchright" && persistentContext) {
     return persistentContext;
   }
 
@@ -269,28 +289,37 @@ const createContext = async (skipTlsVerification: boolean = false): Promise<Brow
 };
 
 const shutdownBrowser = async () => {
-  if (USE_SYSTEM_CHROME && persistentContext) {
+  if (persistentContext) {
     try {
       await persistentContext.close();
     } catch (e) {
       // Context may already be closed
     }
     persistentContext = null;
-  } else if (browser) {
+  }
+  if (browser) {
     try {
       await browser.close();
     } catch (e) {
       // Browser may already be closed
     }
+    browser = null as any;
   }
+  currentEngine = null;
 };
 
-// Check if the persistent context is still valid
-const isContextValid = async (): Promise<boolean> => {
-  if (!USE_SYSTEM_CHROME) {
+// Check if the browser/context is still valid for the given engine
+const isContextValid = async (engine: "playwright" | "patchright"): Promise<boolean> => {
+  // If engine doesn't match current, need to reinitialize
+  if (currentEngine !== engine) {
+    return false;
+  }
+
+  if (engine === "playwright") {
     return browser !== null;
   }
 
+  // patchright mode
   if (!persistentContext) {
     return false;
   }
@@ -302,16 +331,17 @@ const isContextValid = async (): Promise<boolean> => {
   } catch (e) {
     console.log('Persistent context is no longer valid, will reinitialize...');
     persistentContext = null;
+    currentEngine = null;
     return false;
   }
 };
 
-// Ensure browser is initialized and valid
-const ensureBrowserReady = async (): Promise<void> => {
-  const isValid = await isContextValid();
+// Ensure browser is initialized and valid for the given engine
+const ensureBrowserReady = async (engine: "playwright" | "patchright"): Promise<void> => {
+  const isValid = await isContextValid(engine);
   if (!isValid) {
-    console.log('Reinitializing browser...');
-    await initializeBrowser();
+    console.log(`Initializing browser with engine: ${engine}...`);
+    await initializeBrowser(engine);
   }
 };
 
@@ -533,17 +563,20 @@ const executeActions = async (page: Page, actions: Action[]): Promise<ActionResu
 
 app.get('/health', async (req: Request, res: Response) => {
   try {
-    if (!browser) {
-      await initializeBrowser();
-    }
+    const engine = getEffectiveEngine();
+    await ensureBrowserReady(engine);
 
-    const testContext = await createContext();
+    const testContext = await createContext(false, engine);
     const testPage = await testContext.newPage();
     await testPage.close();
-    await testContext.close();
+    // Don't close context in patchright mode
+    if (engine === "playwright") {
+      await testContext.close();
+    }
 
     res.status(200).json({
       status: 'healthy',
+      engine: currentEngine,
       maxConcurrentPages: MAX_CONCURRENT_PAGES,
       activePages: MAX_CONCURRENT_PAGES - pageSemaphore.getAvailablePermits()
     });
@@ -566,8 +599,12 @@ app.post('/scrape', async (req: Request, res: Response) => {
     skip_tls_verification = false,
     actions,
     screenshot,
-    full_page_screenshot
+    full_page_screenshot,
+    browser_engine
   }: UrlModel = req.body;
+
+  // Determine which engine to use
+  const engine = getEffectiveEngine(browser_engine);
 
   console.log(`================= Scrape Request =================`);
   console.log(`URL: ${url}`);
@@ -578,6 +615,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   console.log(`Skip TLS Verification: ${skip_tls_verification}`);
   console.log(`Screenshot: ${screenshot || false}`);
   console.log(`Full Page Screenshot: ${full_page_screenshot || false}`);
+  console.log(`Browser Engine: ${engine}${browser_engine ? ' (from request)' : ' (from env)'}`);
   console.log(`Actions: ${actions ? actions.length : 0} actions`);
   console.log(`==================================================`);
 
@@ -594,7 +632,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   }
 
   // Ensure browser is initialized and still valid (handles closed browser case)
-  await ensureBrowserReady();
+  await ensureBrowserReady(engine);
 
   await pageSemaphore.acquire();
 
@@ -602,7 +640,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   let page: Page | null = null;
 
   try {
-    requestContext = await createContext(skip_tls_verification);
+    requestContext = await createContext(skip_tls_verification, engine);
     page = await requestContext.newPage();
 
     if (headers) {
@@ -670,8 +708,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'An error occurred while fetching the page.' });
   } finally {
     if (page) await page.close();
-    // Don't close the context in persistent mode (USE_SYSTEM_CHROME)
-    if (!USE_SYSTEM_CHROME && requestContext) {
+    // Don't close the context in patchright mode (persistent context)
+    if (engine === "playwright" && requestContext) {
       await requestContext.close();
     }
     pageSemaphore.release();
