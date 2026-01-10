@@ -132,13 +132,18 @@ interface UrlModel {
   full_page_screenshot?: boolean;
   // Override USE_SYSTEM_CHROME env: "playwright" = bundled Chromium, "patchright" = system Chrome
   browser_engine?: "playwright" | "patchright";
+  // Override HEADLESS env: true = headless mode, false = visible browser window
+  headless?: boolean;
 }
 
-let browser: Browser;
+// Browser instances - both can run simultaneously
+let playwrightBrowser: Browser | null = null;
 // Use 'any' type for persistentContext to avoid type conflicts between patchright and playwright
-let persistentContext: any = null;
-// Track which engine is currently active
-let currentEngine: "playwright" | "patchright" | null = null;
+let patchrightContext: any = null;
+
+// Track current headless state for each browser (to detect when restart is needed)
+let playwrightHeadless: boolean | null = null;
+let patchrightHeadless: boolean | null = null;
 
 // Determine which engine to use based on request parameter or env
 const getEffectiveEngine = (requestEngine?: "playwright" | "patchright"): "playwright" | "patchright" => {
@@ -148,102 +153,140 @@ const getEffectiveEngine = (requestEngine?: "playwright" | "patchright"): "playw
   return USE_SYSTEM_CHROME ? "patchright" : "playwright";
 };
 
-const initializeBrowser = async (engine: "playwright" | "patchright" = USE_SYSTEM_CHROME ? "patchright" : "playwright") => {
-  // If switching engines, close the current browser first
-  if (currentEngine && currentEngine !== engine) {
-    console.log(`Switching browser engine from ${currentEngine} to ${engine}...`);
-    await shutdownBrowser();
+// Determine headless mode based on request parameter or env
+const getEffectiveHeadless = (requestHeadless?: boolean): boolean => {
+  if (requestHeadless !== undefined) {
+    return requestHeadless;
+  }
+  return HEADLESS;
+};
+
+// Initialize playwright browser (bundled Chromium)
+const initializePlaywrightBrowser = async (headless: boolean) => {
+  // If browser exists but headless mode changed, close it first
+  if (playwrightBrowser && playwrightHeadless !== headless) {
+    console.log(`Playwright headless mode changed from ${playwrightHeadless} to ${headless}, restarting browser...`);
+    try {
+      await playwrightBrowser.close();
+    } catch (e) {
+      // Browser may already be closed
+    }
+    playwrightBrowser = null;
   }
 
-  currentEngine = engine;
+  if (playwrightBrowser) return;
 
-  if (engine === "patchright") {
-    // Use patchright with system Chrome and persistent context
-    console.log(`Launching system Chrome with patchright (headless: ${HEADLESS})`);
-    console.log(`Browser profile ID: ${BROWSER_PROFILE_ID}`);
+  console.log(`Launching bundled Chromium with headless: ${headless}`);
+  playwrightBrowser = await chromium.launch({
+    headless: headless,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu'
+    ]
+  });
+  playwrightHeadless = headless;
+  console.log('Bundled Chromium launched successfully');
+};
 
-    // Ensure browser profiles directory exists
-    if (!fs.existsSync(BROWSER_PROFILES_DIR)) {
-      fs.mkdirSync(BROWSER_PROFILES_DIR, { recursive: true });
-      console.log(`Created browser-profiles directory: ${BROWSER_PROFILES_DIR}`);
-    }
-
-    const userDataDir = path.join(BROWSER_PROFILES_DIR, `browser-${BROWSER_PROFILE_ID}`);
-
-    // Ensure profile directory exists
-    if (!fs.existsSync(userDataDir)) {
-      fs.mkdirSync(userDataDir, { recursive: true });
-      console.log(`Created new profile directory: browser-${BROWSER_PROFILE_ID}`);
-    } else {
-      console.log(`Using existing profile: browser-${BROWSER_PROFILE_ID}`);
-    }
-
-    console.log(`UserDataDir: ${userDataDir}`);
-
-    const launchOptions: any = {
-      channel: "chrome",
-      headless: HEADLESS,
-      viewport: null,
-    };
-
-    // Add proxy configuration if available
-    if (PROXY_SERVER && PROXY_USERNAME && PROXY_PASSWORD) {
-      launchOptions.proxy = {
-        server: PROXY_SERVER.startsWith('http') ? PROXY_SERVER : `http://${PROXY_SERVER}`,
-        username: PROXY_USERNAME,
-        password: PROXY_PASSWORD,
-      };
-      console.log(`Proxy configured: ${PROXY_SERVER}`);
-    } else if (PROXY_SERVER) {
-      launchOptions.proxy = {
-        server: PROXY_SERVER.startsWith('http') ? PROXY_SERVER : `http://${PROXY_SERVER}`,
-      };
-      console.log(`Proxy configured: ${PROXY_SERVER}`);
-    } else {
-      console.log('No proxy configured (direct connection)');
-    }
-
-    // Launch persistent context with patchright
-    persistentContext = await patchrightChromium.launchPersistentContext(userDataDir, launchOptions);
-
-    // Grant clipboard permissions
+// Initialize patchright browser (system Chrome with persistent context)
+const initializePatchrightBrowser = async (headless: boolean) => {
+  // If context exists but headless mode changed, close it first
+  if (patchrightContext && patchrightHeadless !== headless) {
+    console.log(`Patchright headless mode changed from ${patchrightHeadless} to ${headless}, restarting browser...`);
     try {
-      await persistentContext.grantPermissions(['clipboard-read', 'clipboard-write']);
-      console.log('Clipboard permissions granted');
-    } catch (permError) {
-      console.warn('Failed to grant clipboard permissions:', (permError as Error).message);
+      await patchrightContext.close();
+    } catch (e) {
+      // Context may already be closed
     }
+    patchrightContext = null;
+  }
 
-    // For compatibility, we need a browser reference
-    // In persistent context mode, we'll use the context directly
-    browser = null as any;
+  if (patchrightContext) return;
 
-    console.log('System Chrome launched successfully with patchright');
+  console.log(`Launching system Chrome with patchright (headless: ${headless})`);
+  console.log(`Browser profile ID: ${BROWSER_PROFILE_ID}`);
+
+  // Ensure browser profiles directory exists
+  if (!fs.existsSync(BROWSER_PROFILES_DIR)) {
+    fs.mkdirSync(BROWSER_PROFILES_DIR, { recursive: true });
+    console.log(`Created browser-profiles directory: ${BROWSER_PROFILES_DIR}`);
+  }
+
+  const userDataDir = path.join(BROWSER_PROFILES_DIR, `browser-${BROWSER_PROFILE_ID}`);
+
+  // Ensure profile directory exists
+  if (!fs.existsSync(userDataDir)) {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    console.log(`Created new profile directory: browser-${BROWSER_PROFILE_ID}`);
   } else {
-    // Use standard playwright with bundled Chromium
-    console.log(`Launching bundled Chromium with headless: ${HEADLESS}`);
-    browser = await chromium.launch({
-      headless: HEADLESS,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu'
-      ]
-    });
+    console.log(`Using existing profile: browser-${BROWSER_PROFILE_ID}`);
+  }
+
+  console.log(`UserDataDir: ${userDataDir}`);
+
+  const launchOptions: any = {
+    channel: "chrome",
+    headless: headless,
+    viewport: null,
+  };
+
+  // Add proxy configuration if available
+  if (PROXY_SERVER && PROXY_USERNAME && PROXY_PASSWORD) {
+    launchOptions.proxy = {
+      server: PROXY_SERVER.startsWith('http') ? PROXY_SERVER : `http://${PROXY_SERVER}`,
+      username: PROXY_USERNAME,
+      password: PROXY_PASSWORD,
+    };
+    console.log(`Proxy configured: ${PROXY_SERVER}`);
+  } else if (PROXY_SERVER) {
+    launchOptions.proxy = {
+      server: PROXY_SERVER.startsWith('http') ? PROXY_SERVER : `http://${PROXY_SERVER}`,
+    };
+    console.log(`Proxy configured: ${PROXY_SERVER}`);
+  } else {
+    console.log('No proxy configured (direct connection)');
+  }
+
+  // Launch persistent context with patchright
+  patchrightContext = await patchrightChromium.launchPersistentContext(userDataDir, launchOptions);
+  patchrightHeadless = headless;
+
+  // Grant clipboard permissions
+  try {
+    await patchrightContext.grantPermissions(['clipboard-read', 'clipboard-write']);
+    console.log('Clipboard permissions granted');
+  } catch (permError) {
+    console.warn('Failed to grant clipboard permissions:', (permError as Error).message);
+  }
+
+  console.log('System Chrome launched successfully with patchright');
+};
+
+// Initialize browser for the specified engine
+const initializeBrowser = async (engine: "playwright" | "patchright", headless: boolean) => {
+  if (engine === "patchright") {
+    await initializePatchrightBrowser(headless);
+  } else {
+    await initializePlaywrightBrowser(headless);
   }
 };
 
-const createContext = async (skipTlsVerification: boolean = false, engine: "playwright" | "patchright" = currentEngine || "playwright"): Promise<BrowserContext> => {
+const createContext = async (skipTlsVerification: boolean = false, engine: "playwright" | "patchright"): Promise<BrowserContext> => {
   // If using patchright with persistent context, return the persistent context
-  if (engine === "patchright" && persistentContext) {
-    return persistentContext;
+  if (engine === "patchright" && patchrightContext) {
+    return patchrightContext;
   }
 
-  // Standard mode: create a new context
+  // Standard playwright mode: create a new context
+  if (!playwrightBrowser) {
+    throw new Error('Playwright browser not initialized');
+  }
+
   const userAgent = new UserAgent().toString();
   const viewport = { width: 1280, height: 800 };
 
@@ -265,7 +308,7 @@ const createContext = async (skipTlsVerification: boolean = false, engine: "play
     };
   }
 
-  const newContext = await browser.newContext(contextOptions);
+  const newContext = await playwrightBrowser.newContext(contextOptions);
 
   if (BLOCK_MEDIA) {
     await newContext.route('**/*.{png,jpg,jpeg,gif,svg,mp3,mp4,avi,flac,ogg,wav,webm}', async (route: Route, request: PlaywrightRequest) => {
@@ -289,59 +332,58 @@ const createContext = async (skipTlsVerification: boolean = false, engine: "play
 };
 
 const shutdownBrowser = async () => {
-  if (persistentContext) {
+  if (patchrightContext) {
     try {
-      await persistentContext.close();
+      await patchrightContext.close();
     } catch (e) {
       // Context may already be closed
     }
-    persistentContext = null;
+    patchrightContext = null;
   }
-  if (browser) {
+  if (playwrightBrowser) {
     try {
-      await browser.close();
+      await playwrightBrowser.close();
     } catch (e) {
       // Browser may already be closed
     }
-    browser = null as any;
+    playwrightBrowser = null;
   }
-  currentEngine = null;
 };
 
-// Check if the browser/context is still valid for the given engine
-const isContextValid = async (engine: "playwright" | "patchright"): Promise<boolean> => {
-  // If engine doesn't match current, need to reinitialize
-  if (currentEngine !== engine) {
-    return false;
-  }
-
+// Check if the browser/context is still valid for the given engine and headless mode
+const isContextValid = async (engine: "playwright" | "patchright", headless: boolean): Promise<boolean> => {
   if (engine === "playwright") {
-    return browser !== null;
+    // Check if browser exists and headless mode matches
+    return playwrightBrowser !== null && playwrightHeadless === headless;
   }
 
   // patchright mode
-  if (!persistentContext) {
+  if (!patchrightContext) {
+    return false;
+  }
+
+  // Check if headless mode matches
+  if (patchrightHeadless !== headless) {
     return false;
   }
 
   try {
     // Try to get pages - if context is closed, this will throw
-    await persistentContext.pages();
+    await patchrightContext.pages();
     return true;
   } catch (e) {
-    console.log('Persistent context is no longer valid, will reinitialize...');
-    persistentContext = null;
-    currentEngine = null;
+    console.log('Patchright context is no longer valid, will reinitialize...');
+    patchrightContext = null;
     return false;
   }
 };
 
-// Ensure browser is initialized and valid for the given engine
-const ensureBrowserReady = async (engine: "playwright" | "patchright"): Promise<void> => {
-  const isValid = await isContextValid(engine);
+// Ensure browser is initialized and valid for the given engine and headless mode
+const ensureBrowserReady = async (engine: "playwright" | "patchright", headless: boolean): Promise<void> => {
+  const isValid = await isContextValid(engine, headless);
   if (!isValid) {
-    console.log(`Initializing browser with engine: ${engine}...`);
-    await initializeBrowser(engine);
+    console.log(`Initializing browser with engine: ${engine}, headless: ${headless}...`);
+    await initializeBrowser(engine, headless);
   }
 };
 
@@ -563,20 +605,16 @@ const executeActions = async (page: Page, actions: Action[]): Promise<ActionResu
 
 app.get('/health', async (req: Request, res: Response) => {
   try {
-    const engine = getEffectiveEngine();
-    await ensureBrowserReady(engine);
-
-    const testContext = await createContext(false, engine);
-    const testPage = await testContext.newPage();
-    await testPage.close();
-    // Don't close context in patchright mode
-    if (engine === "playwright") {
-      await testContext.close();
-    }
-
     res.status(200).json({
       status: 'healthy',
-      engine: currentEngine,
+      engines: {
+        playwright: playwrightBrowser !== null ? { status: 'running', headless: playwrightHeadless } : { status: 'stopped' },
+        patchright: patchrightContext !== null ? { status: 'running', headless: patchrightHeadless } : { status: 'stopped' },
+      },
+      defaults: {
+        engine: USE_SYSTEM_CHROME ? 'patchright' : 'playwright',
+        headless: HEADLESS,
+      },
       maxConcurrentPages: MAX_CONCURRENT_PAGES,
       activePages: MAX_CONCURRENT_PAGES - pageSemaphore.getAvailablePermits()
     });
@@ -600,11 +638,13 @@ app.post('/scrape', async (req: Request, res: Response) => {
     actions,
     screenshot,
     full_page_screenshot,
-    browser_engine
+    browser_engine,
+    headless: requestHeadless
   }: UrlModel = req.body;
 
-  // Determine which engine to use
+  // Determine which engine and headless mode to use
   const engine = getEffectiveEngine(browser_engine);
+  const headless = getEffectiveHeadless(requestHeadless);
 
   console.log(`================= Scrape Request =================`);
   console.log(`URL: ${url}`);
@@ -616,6 +656,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   console.log(`Screenshot: ${screenshot || false}`);
   console.log(`Full Page Screenshot: ${full_page_screenshot || false}`);
   console.log(`Browser Engine: ${engine}${browser_engine ? ' (from request)' : ' (from env)'}`);
+  console.log(`Headless: ${headless}${requestHeadless !== undefined ? ' (from request)' : ' (from env)'}`);
   console.log(`Actions: ${actions ? actions.length : 0} actions`);
   console.log(`==================================================`);
 
@@ -632,7 +673,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
   }
 
   // Ensure browser is initialized and still valid (handles closed browser case)
-  await ensureBrowserReady(engine);
+  await ensureBrowserReady(engine, headless);
 
   await pageSemaphore.acquire();
 
@@ -717,7 +758,9 @@ app.post('/scrape', async (req: Request, res: Response) => {
 });
 
 app.listen(port, () => {
-  initializeBrowser().then(() => {
+  const defaultEngine = getEffectiveEngine();
+  const defaultHeadless = getEffectiveHeadless();
+  initializeBrowser(defaultEngine, defaultHeadless).then(() => {
     console.log(`Server is running on port ${port}`);
   });
 });
