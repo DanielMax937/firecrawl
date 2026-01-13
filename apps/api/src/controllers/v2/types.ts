@@ -322,6 +322,14 @@ const actionSchema = z.union([
       ])
       .prefault("Letter"),
   }),
+  z.object({
+    type: z.literal("record"),
+    mode: z.enum(["video", "trace", "rrweb"]).prefault("video"),
+    width: z.int().positive().finite().max(7680).optional(),
+    height: z.int().positive().finite().max(4320).optional(),
+    screenshots: z.boolean().optional(),
+    snapshots: z.boolean().optional(),
+  }),
 ]);
 
 const actionsSchema = z
@@ -545,6 +553,11 @@ const baseScrapeOptions = z.strictObject({
   maxAge: z.int().gte(0).optional(),
   minAge: z.int().gte(0).optional(),
   storeInCache: z.boolean().prefault(true),
+  // Simple mode: use Jina Reader (r.jina.ai) to get markdown content instead of browser
+  simpleMode: z.boolean().prefault(false),
+  // Browser engine: "playwright" (bundled Chromium) or "patchright" (system Chrome with persistent context)
+  // Use "playwright" for recording support (video, trace, rrweb)
+  browserEngine: z.enum(["playwright", "patchright"]).optional(),
   // @deprecated
   __searchPreviewToken: z.string().optional(),
   __experimental_omce: z.boolean().prefault(false).optional(),
@@ -983,6 +996,7 @@ export type Document = {
       value: unknown;
     }[];
     pdfs?: string[];
+    recordings?: string[];
   };
   changeTracking?: {
     previousScrapeAt: string | null;

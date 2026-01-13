@@ -121,6 +121,7 @@ export type EngineScrapeResult = {
       value: unknown;
     }[];
     pdfs: string[];
+    recordings?: string[];
   };
 
   branding?: BrandingProfile;

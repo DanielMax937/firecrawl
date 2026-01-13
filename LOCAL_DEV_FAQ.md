@@ -693,6 +693,104 @@ jq -r '.actions.recordings[0]' response.json | base64 -d > events.json
 | Replayable | Yes (video player) | Yes (Trace Viewer) | Yes (browser) |
 | Engine support | Playwright only | Playwright only | Both engines |
 
+### Simple Mode (Jina Reader)
+
+Simple mode is a lightweight alternative that bypasses the browser entirely and uses [Jina Reader](https://jina.ai/reader/) to fetch clean markdown content. This is ideal for pages where you just need text content without JavaScript rendering, screenshots, or interactive actions.
+
+**How it works:**
+1. When `simple_mode: true` is set, the service skips browser initialization
+2. The URL is transformed: `https://example.com/page` → `https://r.jina.ai/example.com/page`
+3. Jina Reader fetches and converts the page to clean markdown
+4. The markdown content is returned with `contentType: "text/plain"`
+
+**Benefits:**
+- Much faster (no browser overhead)
+- Lower resource usage (no Chromium process)
+- No concurrency limits (doesn't use the page semaphore)
+- Clean markdown output optimized for LLMs
+
+**Limitations:**
+- No JavaScript rendering
+- No screenshots or PDFs
+- No browser actions (click, scroll, etc.)
+- No custom headers or cookies
+
+#### Using Simple Mode with Playwright Service Directly
+
+```bash
+curl -X POST http://localhost:3100/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://deepwiki.com/Skyvern-AI/skyvern/3-data-management-and-workflow-system",
+    "simple_mode": true
+  }'
+```
+
+**Response:**
+```json
+{
+  "content": "# Data Management and Workflow System\n\nThis document describes...",
+  "pageStatusCode": 200,
+  "contentType": "text/plain; charset=utf-8"
+}
+```
+
+#### Using Simple Mode with Firecrawl API (Scrape)
+
+```bash
+curl -X POST http://localhost:3002/v2/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://docs.example.com/api-reference",
+    "simpleMode": true
+  }'
+```
+
+#### Using Simple Mode with Firecrawl API (Crawl)
+
+When crawling, set `simpleMode` in `scrapeOptions` to use Jina Reader for every URL:
+
+```bash
+curl -X POST http://localhost:3002/v2/crawl \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://docs.example.com",
+    "limit": 50,
+    "scrapeOptions": {
+      "simpleMode": true,
+      "formats": ["markdown"]
+    }
+  }'
+```
+
+This makes crawls significantly faster since each URL is fetched via Jina Reader instead of launching a browser page.
+
+#### Simple Mode Comparison
+
+| Aspect | Normal Mode | Simple Mode |
+|--------|-------------|-------------|
+| Engine | Playwright/Patchright | Jina Reader (HTTP) |
+| Speed | Slower (browser) | Fast (HTTP fetch) |
+| JS Rendering | ✅ | ❌ |
+| Screenshots | ✅ | ❌ |
+| Actions | ✅ | ❌ |
+| Resource Usage | High | Low |
+| Output | HTML | Markdown |
+| Best For | SPAs, dynamic content | Static content, docs |
+
+**When to use Simple Mode:**
+- Documentation sites
+- Blog posts and articles
+- Static content pages
+- When you need clean markdown for LLMs
+- High-volume crawls where speed matters
+
+**When NOT to use Simple Mode:**
+- Single-page applications (SPAs)
+- Pages requiring JavaScript
+- When you need screenshots or PDFs
+- When you need to interact with the page (login, click, etc.)
+
 ### How do I use actions in a scrape request?
 
 ```bash

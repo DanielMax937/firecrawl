@@ -407,8 +407,16 @@ function coerceFieldsToFormats(meta: Meta, document: Document): Document {
       document.actions.javascriptReturns &&
       document.actions.javascriptReturns.length > 0;
     const hasPdfs = document.actions.pdfs && document.actions.pdfs.length > 0;
+    const hasRecordings =
+      document.actions.recordings && document.actions.recordings.length > 0;
 
-    if (!hasScreenshots && !hasScrapes && !hasJsReturns && !hasPdfs) {
+    if (
+      !hasScreenshots &&
+      !hasScrapes &&
+      !hasJsReturns &&
+      !hasPdfs &&
+      !hasRecordings
+    ) {
       delete document.actions;
     }
   }

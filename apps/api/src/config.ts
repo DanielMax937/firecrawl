@@ -1,4 +1,8 @@
-import "dotenv/config";
+import { config as dotenvConfig } from "dotenv";
+
+// Load .env file with override: true so .env values take precedence over shell env vars
+dotenvConfig({ override: true });
+
 import { z } from "zod";
 
 /* Codecs */
@@ -158,6 +162,9 @@ const configSchema = z.object({
 
   // Testing
   TEST_API_KEY: z.string().optional(),
+
+  // Simple API Key Authentication (for self-hosted without Supabase)
+  SIMPLE_API_KEY: z.string().optional(),
   TEST_API_URL: z.string().default("http://127.0.0.1:3002"),
   TEST_TEAM_ID: z.string().optional(),
   TEST_SUITE_SELF_HOSTED: z.stringbool().optional(),

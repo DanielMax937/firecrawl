@@ -35,6 +35,19 @@ const VIDEOS_DIR = path.resolve(__dirname, '../../videos');
 // Traces folder in project root
 const TRACES_DIR = path.resolve(__dirname, '../../traces');
 
+// Recordings folder in project root (for rrweb JSON files)
+const RECORDINGS_DIR = path.resolve(__dirname, '../../recordings');
+
+// Load rrweb script for inline injection (bundled locally to avoid CDN issues)
+const RRWEB_SCRIPT_PATH = path.resolve(__dirname, './rrweb.min.js');
+let RRWEB_SCRIPT: string = '';
+try {
+  RRWEB_SCRIPT = fs.readFileSync(RRWEB_SCRIPT_PATH, 'utf-8');
+  console.log(`Loaded rrweb script (${RRWEB_SCRIPT.length} chars)`);
+} catch (e) {
+  console.warn(`Warning: Could not load rrweb script from ${RRWEB_SCRIPT_PATH}`);
+}
+
 const PROXY_SERVER = process.env.PROXY_SERVER || null;
 const PROXY_USERNAME = process.env.PROXY_USERNAME || null;
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || null;
@@ -145,6 +158,8 @@ interface UrlModel {
   browser_engine?: "playwright" | "patchright";
   // Override HEADLESS env: true = headless mode, false = visible browser window
   headless?: boolean;
+  // Simple mode: use Jina Reader (r.jina.ai) to get markdown content instead of browser
+  simple_mode?: boolean;
 }
 
 // Browser instances - both can run simultaneously
@@ -490,6 +505,50 @@ const isValidUrl = (urlString: string): boolean => {
   }
 };
 
+// Simple mode: use Jina Reader to get markdown content without browser
+const scrapeWithJinaReader = async (url: string, timeout: number): Promise<{
+  content: string;
+  status: number | null;
+  contentType: string;
+}> => {
+  // Construct Jina Reader URL: https://r.jina.ai/{url_without_protocol}
+  // Remove protocol (http:// or https://) from the URL
+  const urlWithoutProtocol = url.replace(/^https?:\/\//, '');
+  const jinaUrl = `https://r.jina.ai/${urlWithoutProtocol}`;
+
+  console.log(`Simple mode: fetching from Jina Reader: ${jinaUrl}`);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(jinaUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'Accept': 'text/plain',
+      },
+    });
+
+    clearTimeout(timeoutId);
+
+    const content = await response.text();
+    const contentType = response.headers.get('content-type') || 'text/plain';
+
+    return {
+      content,
+      status: response.status,
+      contentType,
+    };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Jina Reader request timed out after ${timeout}ms`);
+    }
+    throw error;
+  }
+};
+
 const scrapePage = async (page: Page, url: string, waitUntil: 'load' | 'networkidle', waitAfterLoad: number, timeout: number, checkSelector: string | undefined) => {
   console.log(`Navigating to ${url} with waitUntil: ${waitUntil} and timeout: ${timeout}ms`);
   const response = await page.goto(url, { waitUntil, timeout });
@@ -752,7 +811,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
     screenshot,
     full_page_screenshot,
     browser_engine,
-    headless: requestHeadless
+    headless: requestHeadless,
+    simple_mode = false
   }: UrlModel = req.body;
 
   // Determine which engine and headless mode to use
@@ -767,6 +827,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
 
   console.log(`================= Scrape Request =================`);
   console.log(`URL: ${url}`);
+  console.log(`Simple Mode: ${simple_mode}`);
   console.log(`Wait After Load: ${wait_after_load}`);
   console.log(`Timeout: ${timeout}`);
   console.log(`Headers: ${headers ? JSON.stringify(headers) : 'None'}`);
@@ -788,6 +849,30 @@ app.post('/scrape', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Invalid URL' });
   }
 
+  // Simple mode: use Jina Reader instead of browser (no actions supported)
+  if (simple_mode) {
+    try {
+      const result = await scrapeWithJinaReader(url, timeout);
+      const pageError = result.status !== 200 ? getError(result.status) : undefined;
+
+      if (!pageError) {
+        console.log(`✅ Simple mode scrape successful!`);
+      } else {
+        console.log(`🚨 Simple mode scrape failed with status code: ${result.status} ${pageError}`);
+      }
+
+      return res.json({
+        content: result.content,
+        pageStatusCode: result.status,
+        contentType: result.contentType,
+        ...(pageError && { pageError })
+      });
+    } catch (error) {
+      console.error('Simple mode scrape error:', error);
+      return res.status(500).json({ error: error instanceof Error ? error.message : 'An error occurred while fetching the page.' });
+    }
+  }
+
   if (!PROXY_SERVER) {
     console.warn('⚠️ WARNING: No proxy server provided. Your IP address may be blocked.');
   }
@@ -801,6 +886,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
   let page: Page | null = null;
   let videoPath: string | null = null;
   let tracePath: string | null = null;
+  // Store rrweb events in Node.js memory (survives page navigations)
+  const rrwebEvents: any[] = [];
 
   try {
     // Create context with video recording if requested (mode: video)
@@ -823,30 +910,6 @@ app.post('/scrape', async (req: Request, res: Response) => {
 
     page = await requestContext.newPage();
 
-    // Inject rrweb recording script if mode is rrweb (before navigation)
-    if (recordMode === 'rrweb') {
-      // Add script to inject rrweb on page load
-      await page.addInitScript(() => {
-        // Create a global array to store events
-        (window as any).__rrwebEvents = [];
-
-        // Load rrweb from CDN
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/rrweb@2.0.0-alpha.11/dist/rrweb.min.js';
-        script.onload = () => {
-          // Start recording once rrweb is loaded
-          (window as any).rrweb.record({
-            emit: (event: any) => {
-              (window as any).__rrwebEvents.push(event);
-            },
-          });
-          console.log('rrweb recording started');
-        };
-        document.head.appendChild(script);
-      });
-      console.log(`  🎥 rrweb script injection prepared`);
-    }
-
     if (headers) {
       await page.setExtraHTTPHeaders(headers);
     }
@@ -854,9 +917,60 @@ app.post('/scrape', async (req: Request, res: Response) => {
     const result = await scrapePage(page, url, 'load', wait_after_load, timeout, check_selector);
     const pageError = result.status !== 200 ? getError(result.status) : undefined;
 
-    // Wait a bit for rrweb to initialize after page load
+    // Inject rrweb AFTER page loads
+    // Note: rrweb recording is NOT supported with patchright due to CSP restrictions
     if (recordMode === 'rrweb') {
-      await page.waitForTimeout(500); // Give rrweb time to load and start
+      if (engine === 'patchright') {
+        console.warn(`  ⚠️ rrweb recording is NOT supported with patchright persistent context. Use browser_engine: "playwright" for recording.`);
+      } else {
+        try {
+          // Listen for console messages to capture rrweb events
+          page.on('console', (msg) => {
+            const text = msg.text();
+            if (text.startsWith('__RRWEB_EVENT__:')) {
+              try {
+                const eventJson = text.substring('__RRWEB_EVENT__:'.length);
+                const event = JSON.parse(eventJson);
+                rrwebEvents.push(event);
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+          });
+
+          // Inject bundled rrweb script
+          await page.addScriptTag({ content: RRWEB_SCRIPT });
+          console.log(`  🎥 rrweb library injected (bundled)`);
+
+          // Wait a moment for script to execute
+          await page.waitForTimeout(100);
+
+          // Start recording
+          const recordingStarted = await page.evaluate(() => {
+            const rrwebLib = (window as any).rrweb;
+
+            if (rrwebLib && typeof rrwebLib.record === 'function') {
+              rrwebLib.record({
+                emit: function(event: any) {
+                  console.log('__RRWEB_EVENT__:' + JSON.stringify(event));
+                },
+                checkoutEveryNms: 5 * 60 * 1000
+              });
+              (window as any).__rrwebReady = true;
+              return true;
+            }
+            return false;
+          });
+
+          if (recordingStarted) {
+            console.log(`  🎥 rrweb recording started and streaming events to Node.js`);
+          } else {
+            console.warn(`  ⚠️ rrweb recording failed to start`);
+          }
+        } catch (e) {
+          console.warn(`  ⚠️ rrweb injection failed:`, e);
+        }
+      }
     }
 
     // Execute actions if provided
@@ -901,11 +1015,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
         videoPath = await video.path();
         console.log(`  🎬 Video saved: ${videoPath}`);
 
-        // Read video file and convert to base64
+        // Return file path instead of base64
         if (videoPath && fs.existsSync(videoPath)) {
-          const videoBuffer = fs.readFileSync(videoPath);
-          const videoBase64 = videoBuffer.toString('base64');
-
           // Initialize actionResults if needed
           if (!actionResults) {
             actionResults = {
@@ -917,8 +1028,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
             };
           }
 
-          actionResults.recordings.push(videoBase64);
-          console.log(`  🎬 Video converted to base64 (${videoBase64.length} chars)`);
+          actionResults.recordings.push(videoPath);
+          console.log(`  🎬 Video path returned: ${videoPath}`);
         }
       }
     }
@@ -933,11 +1044,8 @@ app.post('/scrape', async (req: Request, res: Response) => {
       await requestContext.tracing.stop({ path: tracePath });
       console.log(`  📊 Trace saved: ${tracePath}`);
 
-      // Read trace file and convert to base64
+      // Return file path instead of base64
       if (tracePath && fs.existsSync(tracePath)) {
-        const traceBuffer = fs.readFileSync(tracePath);
-        const traceBase64 = traceBuffer.toString('base64');
-
         // Initialize actionResults if needed
         if (!actionResults) {
           actionResults = {
@@ -949,23 +1057,30 @@ app.post('/scrape', async (req: Request, res: Response) => {
           };
         }
 
-        actionResults.recordings.push(traceBase64);
-        console.log(`  📊 Trace converted to base64 (${traceBase64.length} chars)`);
+        actionResults.recordings.push(tracePath);
+        console.log(`  📊 Trace path returned: ${tracePath}`);
       }
     }
 
-    // Handle rrweb recording (mode: rrweb) - collect events from page
-    if (recordMode === 'rrweb' && page) {
+    // Handle rrweb recording (mode: rrweb) - events are already in Node.js memory
+    if (recordMode === 'rrweb') {
       try {
-        // Collect rrweb events from the page
-        const rrwebEvents = await page.evaluate(() => {
-          return (window as any).__rrwebEvents || [];
-        });
+        // Events are already collected in rrwebEvents array via exposeFunction
+        // This works even across page navigations!
 
         if (rrwebEvents && rrwebEvents.length > 0) {
-          // Convert events to JSON string, then to base64
-          const eventsJson = JSON.stringify(rrwebEvents);
-          const eventsBase64 = Buffer.from(eventsJson).toString('base64');
+          // Ensure recordings directory exists
+          if (!fs.existsSync(RECORDINGS_DIR)) {
+            fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+            console.log(`Created recordings directory: ${RECORDINGS_DIR}`);
+          }
+
+          // Save events to JSON file
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const rrwebPath = path.join(RECORDINGS_DIR, `rrweb-${timestamp}.json`);
+          const eventsJson = JSON.stringify(rrwebEvents, null, 2);
+          fs.writeFileSync(rrwebPath, eventsJson);
+          console.log(`  🎥 rrweb events saved: ${rrwebPath}`);
 
           // Initialize actionResults if needed
           if (!actionResults) {
@@ -978,13 +1093,13 @@ app.post('/scrape', async (req: Request, res: Response) => {
             };
           }
 
-          actionResults.recordings.push(eventsBase64);
-          console.log(`  🎥 rrweb events collected: ${rrwebEvents.length} events (${eventsBase64.length} chars base64)`);
+          actionResults.recordings.push(rrwebPath);
+          console.log(`  🎥 rrweb path returned: ${rrwebPath} (${rrwebEvents.length} events)`);
         } else {
           console.warn(`  ⚠️ No rrweb events captured`);
         }
       } catch (rrwebError) {
-        console.error(`  ❌ Failed to collect rrweb events:`, rrwebError);
+        console.error(`  ❌ Failed to save rrweb events:`, rrwebError);
       }
     }
 

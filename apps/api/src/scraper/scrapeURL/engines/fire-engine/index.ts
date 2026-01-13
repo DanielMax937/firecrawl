@@ -246,8 +246,10 @@ export async function scrapeURLWithFireEngineChromeCDP(
           ]
         : []),
 
-      // Include specified actions
-      ...(meta.options.actions ?? []),
+      // Include specified actions (filter out 'record' as fire-engine doesn't support it)
+      ...((meta.options.actions ?? []).filter(
+        a => a.type !== "record",
+      ) as Action[]),
 
       // Transform screenshot format into an action (unsupported by chrome-cdp)
       ...(hasFormatOfType(meta.options.formats, "screenshot")

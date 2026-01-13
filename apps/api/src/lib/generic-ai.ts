@@ -57,9 +57,16 @@ export function getModel(name: string, provider: Provider = defaultProvider) {
   if (name === "gemini-2.5-pro") {
     name = "gemini-2.5-pro";
   }
-  return config.MODEL_NAME
-    ? providerList[provider](config.MODEL_NAME)
-    : providerList[provider](name);
+
+  const modelName = config.MODEL_NAME || name;
+
+  // For OpenAI provider with custom base URL (e.g., Volcengine ARK, vLLM, etc.),
+  // use .chat() to force /chat/completions endpoint instead of /responses
+  if (provider === "openai" && config.OPENAI_BASE_URL) {
+    return providerList[provider].chat(modelName);
+  }
+
+  return providerList[provider](modelName);
 }
 
 export function getEmbeddingModel(

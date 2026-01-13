@@ -5,7 +5,7 @@
   "main": "api.ts",
   "scripts": {
     "start": "node dist/api.js",
-    "build": "tsc",
+    "build": "tsc && cp rrweb.min.js dist/",
     "dev": "ts-node api.ts"
   },
   "keywords": [],

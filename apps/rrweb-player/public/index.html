@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rrweb Recording Player</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/style.css">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      color: #fff;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .layout {
+      display: flex;
+      gap: 20px;
+    }
+
+    .sidebar {
+      width: 300px;
+      flex-shrink: 0;
+    }
+
+    .main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .recordings-list {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 15px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .recordings-list h2 {
+      margin: 0 0 15px 0;
+      font-size: 16px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .recording-item {
+      padding: 12px;
+      background: #1a1a2e;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 2px solid transparent;
+    }
+
+    .recording-item:hover {
+      background: #0f3460;
+      border-color: #e94560;
+    }
+
+    .recording-item.active {
+      border-color: #e94560;
+      background: #0f3460;
+    }
+
+    .recording-item .name {
+      font-weight: 600;
+      color: #fff;
+      word-break: break-all;
+      font-size: 13px;
+    }
+
+    .recording-item .meta {
+      font-size: 12px;
+      color: #888;
+      margin-top: 5px;
+    }
+
+    .player-container {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 20px;
+      min-height: 500px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .player-container.has-player {
+      display: block;
+    }
+
+    .placeholder {
+      text-align: center;
+      color: #666;
+    }
+
+    .placeholder svg {
+      width: 80px;
+      height: 80px;
+      margin-bottom: 15px;
+      opacity: 0.5;
+    }
+
+    .loading {
+      color: #e94560;
+    }
+
+    .error {
+      color: #ff6b6b;
+      background: rgba(255, 107, 107, 0.1);
+      padding: 15px;
+      border-radius: 6px;
+    }
+
+    .no-recordings {
+      text-align: center;
+      padding: 40px 20px;
+      color: #666;
+    }
+
+    .refresh-btn {
+      background: #e94560;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 15px;
+      width: 100%;
+    }
+
+    .refresh-btn:hover {
+      background: #d63850;
+    }
+
+    /* Override rrweb-player styles */
+    .rr-player {
+      margin: 0 auto;
+    }
+
+    .rr-player__frame {
+      border-radius: 4px;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"></circle>
+        <polygon points="10 8 16 12 10 16 10 8" fill="currentColor"></polygon>
+      </svg>
+      rrweb Recording Player
+    </h1>
+
+    <div class="layout">
+      <div class="sidebar">
+        <div class="recordings-list">
+          <button class="refresh-btn" onclick="loadRecordings()">Refresh List</button>
+          <h2>Recordings</h2>
+          <div id="recordings"></div>
+        </div>
+      </div>
+
+      <div class="main">
+        <div class="player-container" id="playerContainer">
+          <div class="placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+            <p>Select a recording from the list to play</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/index.js"></script>
+  <script>
+    let currentPlayer = null;
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function formatDate(dateStr) {
+      const date = new Date(dateStr);
+      return date.toLocaleString();
+    }
+
+    function createRecordingItem(rec) {
+      const div = document.createElement('div');
+      div.className = 'recording-item';
+      div.addEventListener('click', function() {
+        playRecording(rec.name, this);
+      });
+
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'name';
+      nameDiv.textContent = rec.name;
+
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'meta';
+      metaDiv.textContent = formatSize(rec.size) + ' - ' + formatDate(rec.modified);
+
+      div.appendChild(nameDiv);
+      div.appendChild(metaDiv);
+
+      return div;
+    }
+
+    async function loadRecordings() {
+      const container = document.getElementById('recordings');
+      container.textContent = '';
+
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'loading';
+      loadingDiv.textContent = 'Loading...';
+      container.appendChild(loadingDiv);
+
+      try {
+        const response = await fetch('/api/recordings');
+        const data = await response.json();
+
+        container.textContent = '';
+
+        if (data.recordings.length === 0) {
+          const noRecDiv = document.createElement('div');
+          noRecDiv.className = 'no-recordings';
+          noRecDiv.textContent = 'No recordings found. Create a recording using the scrape API with {"type": "record", "mode": "rrweb"}';
+          container.appendChild(noRecDiv);
+          return;
+        }
+
+        data.recordings.forEach(rec => {
+          container.appendChild(createRecordingItem(rec));
+        });
+      } catch (error) {
+        container.textContent = '';
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error';
+        errorDiv.textContent = 'Failed to load recordings: ' + error.message;
+        container.appendChild(errorDiv);
+      }
+    }
+
+    async function playRecording(filename, element) {
+      // Update active state
+      document.querySelectorAll('.recording-item').forEach(el => el.classList.remove('active'));
+      if (element) element.classList.add('active');
+
+      const playerContainer = document.getElementById('playerContainer');
+      playerContainer.textContent = '';
+      playerContainer.classList.remove('has-player');
+
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'loading';
+      loadingDiv.textContent = 'Loading recording...';
+      playerContainer.appendChild(loadingDiv);
+
+      try {
+        const response = await fetch('/api/recordings/' + encodeURIComponent(filename));
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        if (!data.events || data.events.length === 0) {
+          throw new Error('Recording contains no events');
+        }
+
+        playerContainer.textContent = '';
+        playerContainer.classList.add('has-player');
+
+        // Destroy previous player if exists
+        if (currentPlayer) {
+          currentPlayer = null;
+        }
+
+        // Create new player
+        currentPlayer = new rrwebPlayer({
+          target: playerContainer,
+          props: {
+            events: data.events,
+            width: 1024,
+            height: 576,
+            autoPlay: true,
+            showController: true,
+            speedOption: [0.5, 1, 2, 4, 8],
+          },
+        });
+
+        console.log('Loaded recording: ' + filename + ' (' + data.events.length + ' events)');
+      } catch (error) {
+        playerContainer.textContent = '';
+        playerContainer.classList.remove('has-player');
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error';
+        errorDiv.textContent = 'Failed to play recording: ' + error.message;
+        playerContainer.appendChild(errorDiv);
+      }
+    }
+
+    // Load recordings on page load
+    loadRecordings();
+  </script>
+</body>
+</html>

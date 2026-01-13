@@ -395,6 +395,38 @@ export async function authenticateUser(
   res,
   mode?: RateLimiterMode,
 ): Promise<AuthResponse> {
+  // Simple API key authentication for self-hosted without Supabase
+  if (
+    config.SIMPLE_API_KEY &&
+    !config.USE_DB_AUTHENTICATION &&
+    !config.SUPABASE_ACUC_URL
+  ) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return { success: false, error: "Unauthorized", status: 401 };
+    }
+    const token = authHeader.split(" ")[1];
+    if (!token) {
+      return {
+        success: false,
+        error: "Unauthorized: Token missing",
+        status: 401,
+      };
+    }
+    if (token !== config.SIMPLE_API_KEY) {
+      return {
+        success: false,
+        error: "Unauthorized: Invalid token",
+        status: 401,
+      };
+    }
+    return {
+      success: true,
+      team_id: "simple-api-key",
+      chunk: mockACUC(),
+    };
+  }
+
   if (!!config.SUPABASE_ACUC_URL) {
     return supaAuthenticateUser(req, res, mode);
   }

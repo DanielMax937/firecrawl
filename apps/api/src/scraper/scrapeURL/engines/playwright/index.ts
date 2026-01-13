@@ -22,6 +22,8 @@ export async function scrapeURLWithPlaywright(
       actions: meta.options.actions,
       screenshot: meta.featureFlags.has("screenshot"),
       full_page_screenshot: meta.featureFlags.has("screenshot@fullScreen"),
+      simple_mode: meta.options.simpleMode,
+      browser_engine: meta.options.browserEngine,
     },
     method: "POST",
     logger: meta.logger.child("scrapeURLWithPlaywright/robustFetch"),
@@ -39,6 +41,7 @@ export async function scrapeURLWithPlaywright(
             z.object({ type: z.string(), value: z.unknown() }),
           ),
           pdfs: z.array(z.string()),
+          recordings: z.array(z.string()).optional(),
         })
         .optional(),
     }),
