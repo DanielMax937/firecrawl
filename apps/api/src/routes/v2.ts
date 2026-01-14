@@ -39,6 +39,12 @@ import { facilitator } from "@coinbase/x402";
 import { agentController } from "../controllers/v2/agent";
 import { agentStatusController } from "../controllers/v2/agent-status";
 import { agentCancelController } from "../controllers/v2/agent-cancel";
+import {
+  localAgentController,
+  localAgentStatusController,
+  localAgentCancelController,
+  localAgentHealthController,
+} from "../controllers/v2/local-agent";
 
 expressWs(express());
 
@@ -323,6 +329,33 @@ v2Router.delete(
   authMiddleware(RateLimiterMode.ExtractStatus),
   validateJobIdParam,
   wrap(agentCancelController),
+);
+
+// Local Agent - runs locally without external EXTRACT_V3_BETA_URL
+v2Router.post(
+  "/local-agent",
+  authMiddleware(RateLimiterMode.Extract),
+  countryCheck,
+  blocklistMiddleware,
+  wrap(localAgentController),
+);
+
+v2Router.get(
+  "/local-agent/health",
+  authMiddleware(RateLimiterMode.CrawlStatus),
+  wrap(localAgentHealthController),
+);
+
+v2Router.get(
+  "/local-agent/:jobId",
+  authMiddleware(RateLimiterMode.ExtractStatus),
+  wrap(localAgentStatusController),
+);
+
+v2Router.delete(
+  "/local-agent/:jobId",
+  authMiddleware(RateLimiterMode.ExtractStatus),
+  wrap(localAgentCancelController),
 );
 
 v2Router.get(

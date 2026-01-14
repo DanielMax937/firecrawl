@@ -979,9 +979,13 @@ V2 is the latest and recommended API version. All endpoints are prefixed with `/
 | `/v2/search` | POST | Web search + scrape | 2 per 10 results |
 | `/v2/extract` | POST | AI data extraction | 20+ |
 | `/v2/extract/:jobId` | GET | Get extract status | 0 |
-| `/v2/agent` | POST | AI agent | Variable |
+| `/v2/agent` | POST | AI agent (cloud) | Variable |
 | `/v2/agent/:jobId` | GET | Get agent status | 0 |
 | `/v2/agent/:jobId` | DELETE | Cancel agent | 0 |
+| `/v2/local-agent` | POST | AI agent (local) | Your LLM costs |
+| `/v2/local-agent/:jobId` | GET | Get local agent status | 0 |
+| `/v2/local-agent/:jobId` | DELETE | Cancel local agent | 0 |
+| `/v2/local-agent/health` | GET | Local agent health check | 0 |
 | `/v2/concurrency-check` | GET | Check concurrency | 0 |
 | `/v2/team/credit-usage` | GET | Credit usage | 0 |
 | `/v2/team/queue-status` | GET | Queue status | 0 |
@@ -1783,6 +1787,242 @@ curl -X DELETE http://localhost:3002/v2/agent/agent-job-abc
   "success": true
 }
 ```
+
+---
+
+### Local Agent API (Self-Hosted Alternative)
+
+The Local Agent is a self-hosted alternative to the cloud `/v2/agent` endpoint. It runs entirely locally using your configured LLM provider and the Playwright service - no external `EXTRACT_V3_BETA_URL` required.
+
+**How it works:**
+1. LLM creates an action plan based on your prompt
+2. Playwright navigates to pages and takes screenshots with numbered element overlays
+3. LLM with vision analyzes the screenshot and DOM to decide the next action
+4. Actions are executed (click, type, scroll, etc.) with retry logic
+5. Data is extracted when the goal is achieved
+
+**Requirements:**
+- LLM provider configured (`OPENAI_API_KEY` or `OLLAMA_BASE_URL`)
+- Playwright service running (`PLAYWRIGHT_MICROSERVICE_URL`)
+- Vision-capable model (e.g., `gpt-4o-mini`, `llava`, `claude-3-5-sonnet`)
+
+#### POST /v2/local-agent - Start Local Agent Job
+
+**Purpose:** Start a local agent job. Returns immediately with a job ID.
+
+```bash
+curl -X POST http://localhost:3002/v2/local-agent \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Go to Hacker News and extract the top 5 story titles",
+    "urls": ["https://news.ycombinator.com"],
+    "maxIterations": 10
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "id": "01936a7b-8c9d-7e0f-1234-567890abcdef"
+}
+```
+
+#### With Schema Extraction
+
+```bash
+curl -X POST http://localhost:3002/v2/local-agent \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Extract the top 5 stories from Hacker News",
+    "urls": ["https://news.ycombinator.com"],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "stories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "points": {"type": "number"},
+              "url": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "maxIterations": 15
+  }'
+```
+
+#### Local Agent Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `prompt` | string | required | Task description for the agent |
+| `urls` | string[] | - | Starting URL(s) |
+| `schema` | object | - | JSON schema for data extraction |
+| `maxIterations` | number | 20 | Max iterations (1-50) |
+| `timeout` | number | 120000 | Timeout in ms (5s-5min) |
+
+---
+
+#### GET /v2/local-agent/:jobId - Local Agent Status
+
+**Purpose:** Get the status and results of a local agent job.
+
+```bash
+curl http://localhost:3002/v2/local-agent/01936a7b-8c9d-7e0f-1234-567890abcdef
+```
+
+**Response (Processing):**
+```json
+{
+  "success": true,
+  "id": "01936a7b-...",
+  "status": "processing",
+  "createdAt": "2024-01-14T10:00:00.000Z",
+  "expiresAt": "2024-01-15T10:00:00.000Z",
+  "progress": {
+    "currentIteration": 3,
+    "maxIterations": 20,
+    "currentStep": "Iteration 3/20",
+    "stepsCompleted": 2
+  }
+}
+```
+
+**Response (Completed):**
+```json
+{
+  "success": true,
+  "id": "01936a7b-...",
+  "status": "completed",
+  "data": {
+    "stories": [
+      {"title": "Show HN: ...", "points": 150, "url": "https://..."},
+      {"title": "Ask HN: ...", "points": 120, "url": "https://..."}
+    ]
+  },
+  "steps": [
+    {
+      "action": {
+        "type": "navigate",
+        "url": "https://news.ycombinator.com",
+        "reasoning": "Navigate to Hacker News homepage",
+        "maxRetries": 3
+      },
+      "success": true,
+      "retryCount": 0,
+      "pageUrl": "https://news.ycombinator.com",
+      "pageTitle": "Hacker News"
+    },
+    {
+      "action": {
+        "type": "extract",
+        "reasoning": "Extract the top 5 stories from the page"
+      },
+      "success": true
+    }
+  ],
+  "totalIterations": 3
+}
+```
+
+**Status Values:**
+| Status | Description |
+|--------|-------------|
+| `processing` | Job is running |
+| `completed` | Job finished successfully |
+| `failed` | Job failed (check `error` field) |
+| `cancelled` | Job was cancelled by user |
+
+---
+
+#### DELETE /v2/local-agent/:jobId - Cancel Local Agent
+
+**Purpose:** Cancel a running local agent job.
+
+```bash
+curl -X DELETE http://localhost:3002/v2/local-agent/01936a7b-8c9d-7e0f-1234-567890abcdef
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Job cancellation requested"
+}
+```
+
+**Note:** Cancellation is graceful - the agent will stop at the next iteration checkpoint.
+
+---
+
+#### GET /v2/local-agent/health - Local Agent Health Check
+
+**Purpose:** Check if local agent dependencies are configured and reachable.
+
+```bash
+curl http://localhost:3002/v2/local-agent/health
+```
+
+**Response:**
+```json
+{
+  "healthy": true,
+  "checks": {
+    "llmConfigured": true,
+    "playwrightConfigured": true,
+    "playwrightReachable": true
+  },
+  "message": "Local agent is ready"
+}
+```
+
+---
+
+#### Local Agent vs Cloud Agent
+
+| Feature | Local Agent (`/v2/local-agent`) | Cloud Agent (`/v2/agent`) |
+|---------|--------------------------------|---------------------------|
+| LLM Provider | Your configured provider | Firecrawl's FIRE-1 model |
+| External Service | None required | Requires `EXTRACT_V3_BETA_URL` |
+| Vision Model | Any vision-capable model | Built-in |
+| Job Storage | In-memory (24h expiry) | Supabase + GCS |
+| Cost | Your LLM API costs | Firecrawl credits |
+| Best For | Self-hosted, local dev | Production, managed |
+
+#### Configuring LLM for Local Agent
+
+The local agent uses the same LLM configuration as other Firecrawl AI features:
+
+**OpenAI (or compatible API):**
+```bash
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://api.openai.com/v1  # Optional, for custom endpoints
+MODEL_NAME=gpt-4o-mini  # Optional, defaults to gpt-4o-mini
+```
+
+**Ollama (Local):**
+```bash
+OLLAMA_BASE_URL=http://localhost:11434/api
+MODEL_NAME=llava  # Must be vision-capable
+```
+
+**Other Providers:**
+```bash
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+MODEL_NAME=claude-3-5-sonnet-20241022
+
+# Google
+GOOGLE_GENERATIVE_AI_API_KEY=...
+MODEL_NAME=gemini-1.5-pro
+```
+
+**Important:** The model must support vision (image input) for screenshot analysis.
 
 ---
 

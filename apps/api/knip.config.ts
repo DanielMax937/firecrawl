@@ -12,11 +12,7 @@ const config: KnipConfig = {
     "src/services/search-index-db.ts", // WIP
     "src/lib/search-index-client.ts", // WIP
   ],
-  ignoreDependencies: [
-    "openai",
-    "undici-types",
-    "@pinecone-database/pinecone", // WIP
-  ],
+  ignoreDependencies: ["openai", "undici-types"],
 };
 
 export default config;
