@@ -47,7 +47,7 @@ REDIS_URL=redis://localhost:6379
 REDIS_RATE_LIMIT_URL=redis://localhost:6379
 
 # Playwright service (local)
-PLAYWRIGHT_MICROSERVICE_URL=http://localhost:3000/scrape
+PLAYWRIGHT_MICROSERVICE_URL=http://localhost:3100/scrape
 
 # PostgreSQL (local)
 NUQ_DATABASE_URL=postgres://YOUR_USERNAME@localhost:5432/firecrawl
@@ -176,7 +176,7 @@ curl -X POST http://localhost:3002/v1/scrape \
 
 Add to `apps/api/.env`:
 ```bash
-PLAYWRIGHT_MICROSERVICE_URL=http://localhost:3000/scrape
+PLAYWRIGHT_MICROSERVICE_URL=http://localhost:3100/scrape
 ```
 
 Then start the Playwright service:
@@ -2428,7 +2428,7 @@ brew services restart rabbitmq
          ▼                         ▼                         ▼
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────────┐
 │      Redis      │     │   PostgreSQL    │     │  Playwright Service │
-│ (localhost:6379)│     │ (localhost:5432)│     │  (localhost:3000)   │
+│ (localhost:6379)│     │ (localhost:5432)│     │  (localhost:3100)   │
 │                 │     │                 │     │                     │
 │ - BullMQ queues │     │ - NuQ job queue │     │  - JS rendering     │
 │ - Rate limiting │     │ - Job results   │     │  - Browser pool     │
