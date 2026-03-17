@@ -24,6 +24,9 @@ apps/playwright-service-ts/package-lock.json
 
 # Browser profiles for patchright persistent context
 /browser-profiles/
+apps/browser-profiles/
+.firecrawl.pids
+/logs/
 
 
 /examples/o1_web_crawler/venv
